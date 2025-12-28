@@ -10,22 +10,21 @@ st.set_page_config(
 
 st.title("📊 AdTech Site Health Dashboard")
 
-# ---------------- LOAD DATA ----------------
-@st.cache_data
-def load_data():
-    uploaded_file = st.file_uploader("Upload Site Health CSV", type="csv")
+# ---------------- FILE UPLOAD ----------------
+uploaded_file = st.file_uploader("Upload Site Health CSV", type="csv")
 
 if uploaded_file is None:
     st.warning("Please upload the CSV file")
     st.stop()
 
-df = pd.read_csv(uploaded_file)
-df["Date"] = pd.to_datetime(df["Date"])
-
+# ---------------- LOAD DATA ----------------
+@st.cache_data
+def load_data(file):
+    df = pd.read_csv(file)
     df["Date"] = pd.to_datetime(df["Date"])
     return df
 
-df = load_data()
+df = load_data(uploaded_file)
 
 # ---------------- DATE SELECTION ----------------
 selected_date = st.date_input(
@@ -54,16 +53,16 @@ base_req = baseline_df["Ad Requests"].mean()
 base_ecpm = (
     baseline_df["Revenue"].sum() /
     baseline_df["Impressions"].sum()
-) * 1000
+) * 1000 if baseline_df["Impressions"].sum() > 0 else 0
 
 # ---------------- % CHANGES ----------------
-rev_change = (today_rev - base_rev) / base_rev * 100
-imps_change = (today_imps - base_imps) / base_imps * 100
-ecpm_change = (today_ecpm - base_ecpm) / base_ecpm * 100
+rev_change = ((today_rev - base_rev) / base_rev * 100) if base_rev > 0 else 0
+imps_change = ((today_imps - base_imps) / base_imps * 100) if base_imps > 0 else 0
+ecpm_change = ((today_ecpm - base_ecpm) / base_ecpm * 100) if base_ecpm > 0 else 0
 
 fill_today = today_imps / today_req if today_req > 0 else 0
 fill_base = base_imps / base_req if base_req > 0 else 0
-fill_change = (fill_today - fill_base) / fill_base * 100
+fill_change = ((fill_today - fill_base) / fill_base * 100) if fill_base > 0 else 0
 
 # ---------------- HEALTH SCORE ----------------
 health_score = (
@@ -172,6 +171,4 @@ st.subheader("📈 Revenue Trend (Last 14 Days)")
 
 trend_df = df.sort_values("Date").tail(14)
 
-st.line_chart(
-    trend_df.set_index("Date")["Revenue"]
-)
+st.line_chart(trend_df.set_index("Date")["Revenue"])
