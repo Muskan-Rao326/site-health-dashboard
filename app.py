@@ -2,7 +2,7 @@ import streamlit as st
 import pandas as pd
 import numpy as np
 
-# ---------------- CONFIG ----------------
+# ================= CONFIG =================
 st.set_page_config(
     page_title="Site Health Monitor",
     layout="wide"
@@ -10,61 +10,74 @@ st.set_page_config(
 
 st.title("📊 AdTech Site Health Dashboard")
 
-# ---------------- FILE UPLOAD ----------------
-uploaded_file = st.file_uploader("Upload Site Health CSV", type="csv")
-
-if uploaded_file is None:
-    st.warning("Please upload the CSV file")
-    st.stop()
-
-# ---------------- LOAD DATA ----------------
+# ================= LOAD DATA =================
 @st.cache_data
 def load_data(file):
     df = pd.read_csv(file)
-    df["Date"] = pd.to_datetime(df["Date"])
+
+    # Normalize column names
+    df.columns = (
+        df.columns
+        .str.strip()
+        .str.lower()
+        .str.replace(" ", "_")
+    )
+
+    # Date parsing
+    df["date"] = pd.to_datetime(df["date"])
+
     return df
+
+uploaded_file = st.file_uploader(
+    "📤 Upload Site Health CSV",
+    type="csv"
+)
+
+if uploaded_file is None:
+    st.warning("Please upload the CSV file to continue")
+    st.stop()
 
 df = load_data(uploaded_file)
 
-# ---------------- DATE SELECTION ----------------
+# ================= DATE SELECTION =================
 selected_date = st.date_input(
     "📅 Select Date",
-    df["Date"].max().date()
+    df["date"].max().date()
 )
 
-day_df = df[df["Date"] == pd.to_datetime(selected_date)]
-baseline_df = df[df["Date"] < pd.to_datetime(selected_date)].tail(7)
+day_df = df[df["date"] == pd.to_datetime(selected_date)]
+baseline_df = df[df["date"] < pd.to_datetime(selected_date)].tail(7)
 
 if day_df.empty or baseline_df.empty:
-    st.error("Not enough data to calculate health")
+    st.error("Not enough historical data to calculate health")
     st.stop()
 
-# ---------------- CORE METRICS ----------------
-today_rev = day_df["Revenue"].sum()
-today_imps = day_df["Impressions"].sum()
-today_req = day_df["Ad Requests"].sum()
+# ================= CORE METRICS =================
+today_rev = day_df["revenue"].sum()
+today_imps = day_df["impressions"].sum()
+today_req = day_df["adrequests"].sum()
 
 today_ecpm = (today_rev / today_imps) * 1000 if today_imps > 0 else 0
+fill_today = today_imps / today_req if today_req > 0 else 0
 
-base_rev = baseline_df["Revenue"].mean()
-base_imps = baseline_df["Impressions"].mean()
-base_req = baseline_df["Ad Requests"].mean()
+base_rev = baseline_df["revenue"].mean()
+base_imps = baseline_df["impressions"].mean()
+base_req = baseline_df["adrequests"].mean()
 
 base_ecpm = (
-    baseline_df["Revenue"].sum() /
-    baseline_df["Impressions"].sum()
-) * 1000 if baseline_df["Impressions"].sum() > 0 else 0
+    baseline_df["revenue"].sum() /
+    baseline_df["impressions"].sum()
+) * 1000
 
-# ---------------- % CHANGES ----------------
-rev_change = ((today_rev - base_rev) / base_rev * 100) if base_rev > 0 else 0
-imps_change = ((today_imps - base_imps) / base_imps * 100) if base_imps > 0 else 0
-ecpm_change = ((today_ecpm - base_ecpm) / base_ecpm * 100) if base_ecpm > 0 else 0
-
-fill_today = today_imps / today_req if today_req > 0 else 0
 fill_base = base_imps / base_req if base_req > 0 else 0
-fill_change = ((fill_today - fill_base) / fill_base * 100) if fill_base > 0 else 0
 
-# ---------------- HEALTH SCORE ----------------
+# ================= % CHANGES =================
+rev_change = (today_rev - base_rev) / base_rev * 100
+imps_change = (today_imps - base_imps) / base_imps * 100
+ecpm_change = (today_ecpm - base_ecpm) / base_ecpm * 100
+fill_change = (fill_today - fill_base) / fill_base * 100
+
+# ================= HEALTH SCORE =================
 health_score = (
     (100 + rev_change) * 0.50 +
     (100 + ecpm_change) * 0.25 +
@@ -74,7 +87,7 @@ health_score = (
 
 health_score = max(0, min(100, health_score))
 
-# ---------------- STATUS ----------------
+# ================= STATUS =================
 if health_score >= 80:
     status = "🟢 HEALTHY"
 elif health_score >= 60:
@@ -82,25 +95,25 @@ elif health_score >= 60:
 else:
     status = "🔴 CRITICAL"
 
-# ---------------- TOP ALERT ----------------
+# ================= STATUS DISPLAY =================
 st.markdown("## 🚦 Site Health Status")
 
-if status.startswith("🟢"):
+if "🟢" in status:
     st.success(f"{status} | Score: {health_score:.1f}/100")
-elif status.startswith("🟡"):
+elif "🟡" in status:
     st.warning(f"{status} | Score: {health_score:.1f}/100")
 else:
     st.error(f"{status} 🚨 | Score: {health_score:.1f}/100")
 
-# ---------------- KPI ROW ----------------
+# ================= KPI ROW =================
 col1, col2, col3, col4 = st.columns(4)
 
 col1.metric("Revenue", f"{today_rev:,.0f}", f"{rev_change:.1f}%")
-col2.metric("eCPM", f"{today_ecpm:,.2f}", f"{ecpm_change:.1f}%")
+col2.metric("eCPM", f"{today_ecpm:,.0f}", f"{ecpm_change:.1f}%")
 col3.metric("Fill Rate", f"{fill_today:.2%}", f"{fill_change:.1f}%")
 col4.metric("Impressions", f"{today_imps:,.0f}", f"{imps_change:.1f}%")
 
-# ---------------- ROOT CAUSE ----------------
+# ================= ROOT CAUSE =================
 st.divider()
 st.subheader("🧩 Revenue Root Cause Ranking")
 
@@ -120,28 +133,28 @@ st.dataframe(root_df.style.background_gradient(cmap="Reds"))
 primary_issue = root_df.index[0]
 st.warning(f"Primary Revenue Impact Driver: **{primary_issue}**")
 
-# ---------------- ANOMALY DETECTION ----------------
+# ================= ANOMALY DETECTION =================
 st.divider()
 st.subheader("🚨 Anomaly & Risk Detection")
 
-anomaly_found = False
+anomaly = False
 
 if imps_change > 20 and rev_change < -20:
-    st.error("🚩 Traffic increased but revenue dropped → Possible low-quality / fraud traffic")
-    anomaly_found = True
+    st.error("🚩 Traffic up but revenue down → Low quality or fraud traffic")
+    anomaly = True
 
 if ecpm_change < -30:
-    st.error("🚩 Severe eCPM crash → Demand or pricing issue")
-    anomaly_found = True
+    st.error("🚩 Severe eCPM drop → Demand or pricing issue")
+    anomaly = True
 
 if fill_change < -25:
-    st.error("🚩 Fill rate collapse → Requests not monetizing")
-    anomaly_found = True
+    st.error("🚩 Fill rate collapse → Monetization issue")
+    anomaly = True
 
-if not anomaly_found:
-    st.success("✅ No critical anomalies detected")
+if not anomaly:
+    st.success("✅ No major anomalies detected")
 
-# ---------------- EXECUTIVE SUMMARY ----------------
+# ================= EXECUTIVE SUMMARY =================
 st.divider()
 st.header("📌 Executive Summary")
 
@@ -150,25 +163,27 @@ st.markdown(f"""
 
 **Date:** {selected_date}
 
-**Revenue:** {today_rev:,.0f}  
-**Revenue Change:** {rev_change:.1f}%  
-**eCPM Change:** {ecpm_change:.1f}%  
-**Fill Rate Change:** {fill_change:.1f}%  
-**Traffic Change:** {imps_change:.1f}%  
+- **Revenue:** {today_rev:,.0f}
+- **Revenue Change:** {rev_change:.1f}%
+- **eCPM Change:** {ecpm_change:.1f}%
+- **Fill Rate Change:** {fill_change:.1f}%
+- **Traffic Change:** {imps_change:.1f}%
 
 ### 🧠 Key Insight
-Revenue impact today is primarily driven by **{primary_issue}**.
+Primary revenue impact driven by **{primary_issue}**
 
 ### 🎯 Recommended Action
 - Investigate **{primary_issue}**
-- Validate demand, pricing & traffic quality
-- Monitor closely over next 24 hours
+- Review demand, pricing & traffic quality
+- Monitor next 24 hours closely
 """)
 
-# ---------------- TREND VIEW ----------------
+# ================= TREND =================
 st.divider()
 st.subheader("📈 Revenue Trend (Last 14 Days)")
 
-trend_df = df.sort_values("Date").tail(14)
+trend_df = df.sort_values("date").tail(14)
 
-st.line_chart(trend_df.set_index("Date")["Revenue"])
+st.line_chart(
+    trend_df.set_index("date")["revenue"]
+)
