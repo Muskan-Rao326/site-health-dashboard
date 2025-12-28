@@ -1,100 +1,169 @@
-import pandas as pd
 import streamlit as st
-import plotly.express as px
-import plotly.graph_objects as go
+import pandas as pd
+import numpy as np
 
-st.set_page_config(page_title="Site Health Dashboard", layout="wide")
-
-st.title("📊 Site Health Dashboard")
-
-# Upload CSV
-uploaded_file = st.file_uploader(
-    "Upload site health CSV (single_site_health_scored.csv)",
-    type=["csv"]
+# ---------------- CONFIG ----------------
+st.set_page_config(
+    page_title="Site Health Monitor",
+    layout="wide"
 )
 
-if uploaded_file:
-    df = pd.read_csv(uploaded_file)
+st.title("📊 AdTech Site Health Dashboard")
+
+# ---------------- LOAD DATA ----------------
+@st.cache_data
+def load_data():
+    df = pd.read_csv("single_site_health_scored.csv")
     df["Date"] = pd.to_datetime(df["Date"])
+    return df
 
-    df = df.sort_values("Date")
+df = load_data()
 
-    # =========================
-    # KPIs
-    # =========================
-    latest = df.iloc[-1]
+# ---------------- DATE SELECTION ----------------
+selected_date = st.date_input(
+    "📅 Select Date",
+    df["Date"].max().date()
+)
 
-    col1, col2, col3 = st.columns(3)
+day_df = df[df["Date"] == pd.to_datetime(selected_date)]
+baseline_df = df[df["Date"] < pd.to_datetime(selected_date)].tail(7)
 
-    col1.metric(
-        "💰 Revenue",
-        f"{latest['Revenue']:,.0f}",
-        delta=f"{latest['Revenue'] - df.iloc[-2]['Revenue']:,.0f}"
-    )
+if day_df.empty or baseline_df.empty:
+    st.error("Not enough data to calculate health")
+    st.stop()
 
-    col2.metric(
-        "👥 Sessions",
-        f"{latest['Sessions']:,.0f}",
-        delta=f"{latest['Sessions'] - df.iloc[-2]['Sessions']:,.0f}"
-    )
+# ---------------- CORE METRICS ----------------
+today_rev = day_df["Revenue"].sum()
+today_imps = day_df["Impressions"].sum()
+today_req = day_df["Ad Requests"].sum()
 
-    col3.metric(
-        "❤️ Health Score",
-        f"{latest['HealthScore']:.1f}"
-    )
+today_ecpm = (today_rev / today_imps) * 1000 if today_imps > 0 else 0
 
-    st.divider()
+base_rev = baseline_df["Revenue"].mean()
+base_imps = baseline_df["Impressions"].mean()
+base_req = baseline_df["Ad Requests"].mean()
 
-    # =========================
-    # Charts
-    # =========================
-    colA, colB = st.columns(2)
+base_ecpm = (
+    baseline_df["Revenue"].sum() /
+    baseline_df["Impressions"].sum()
+) * 1000
 
-    with colA:
-        fig_rev = px.line(
-            df, x="Date", y="Revenue",
-            title="Revenue Trend",
-            markers=True
-        )
-        st.plotly_chart(fig_rev, use_container_width=True)
+# ---------------- % CHANGES ----------------
+rev_change = (today_rev - base_rev) / base_rev * 100
+imps_change = (today_imps - base_imps) / base_imps * 100
+ecpm_change = (today_ecpm - base_ecpm) / base_ecpm * 100
 
-    with colB:
-        fig_sess = px.line(
-            df, x="Date", y="Sessions",
-            title="Sessions Trend",
-            markers=True
-        )
-        st.plotly_chart(fig_sess, use_container_width=True)
+fill_today = today_imps / today_req if today_req > 0 else 0
+fill_base = base_imps / base_req if base_req > 0 else 0
+fill_change = (fill_today - fill_base) / fill_base * 100
 
-    # =========================
-    # Health Score Gauge
-    # =========================
-    score = latest["HealthScore"]
+# ---------------- HEALTH SCORE ----------------
+health_score = (
+    (100 + rev_change) * 0.50 +
+    (100 + ecpm_change) * 0.25 +
+    (100 + fill_change) * 0.15 +
+    (100 + imps_change) * 0.10
+)
 
-    color = "green" if score >= 75 else "orange" if score >= 50 else "red"
+health_score = max(0, min(100, health_score))
 
-    fig_gauge = go.Figure(go.Indicator(
-        mode="gauge+number",
-        value=score,
-        title={"text": "Overall Site Health"},
-        gauge={
-            "axis": {"range": [0, 100]},
-            "bar": {"color": color},
-            "steps": [
-                {"range": [0, 50], "color": "#ffcccc"},
-                {"range": [50, 75], "color": "#fff2cc"},
-                {"range": [75, 100], "color": "#ccffcc"},
-            ]
-        }
-    ))
-
-    st.plotly_chart(fig_gauge, use_container_width=True)
-
-    # =========================
-    # Raw Data (Optional)
-    # =========================
-    with st.expander("📄 View Raw Data"):
-        st.dataframe(df)
-
+# ---------------- STATUS ----------------
+if health_score >= 80:
+    status = "🟢 HEALTHY"
+elif health_score >= 60:
+    status = "🟡 NEEDS ATTENTION"
 else:
-    st.info("⬆️ Upload your `single_site_health_scored.csv` file to view the dashboard.")
+    status = "🔴 CRITICAL"
+
+# ---------------- TOP ALERT ----------------
+st.markdown("## 🚦 Site Health Status")
+
+if status.startswith("🟢"):
+    st.success(f"{status} | Score: {health_score:.1f}/100")
+elif status.startswith("🟡"):
+    st.warning(f"{status} | Score: {health_score:.1f}/100")
+else:
+    st.error(f"{status} 🚨 | Score: {health_score:.1f}/100")
+
+# ---------------- KPI ROW ----------------
+col1, col2, col3, col4 = st.columns(4)
+
+col1.metric("Revenue", f"{today_rev:,.0f}", f"{rev_change:.1f}%")
+col2.metric("eCPM", f"{today_ecpm:,.2f}", f"{ecpm_change:.1f}%")
+col3.metric("Fill Rate", f"{fill_today:.2%}", f"{fill_change:.1f}%")
+col4.metric("Impressions", f"{today_imps:,.0f}", f"{imps_change:.1f}%")
+
+# ---------------- ROOT CAUSE ----------------
+st.divider()
+st.subheader("🧩 Revenue Root Cause Ranking")
+
+root_causes = {
+    "eCPM": ecpm_change * 0.5,
+    "Fill Rate": fill_change * 0.3,
+    "Traffic": imps_change * 0.2
+}
+
+root_df = (
+    pd.DataFrame.from_dict(root_causes, orient="index", columns=["Impact"])
+    .sort_values("Impact")
+)
+
+st.dataframe(root_df.style.background_gradient(cmap="Reds"))
+
+primary_issue = root_df.index[0]
+st.warning(f"Primary Revenue Impact Driver: **{primary_issue}**")
+
+# ---------------- ANOMALY DETECTION ----------------
+st.divider()
+st.subheader("🚨 Anomaly & Risk Detection")
+
+anomaly_found = False
+
+if imps_change > 20 and rev_change < -20:
+    st.error("🚩 Traffic increased but revenue dropped → Possible low-quality / fraud traffic")
+    anomaly_found = True
+
+if ecpm_change < -30:
+    st.error("🚩 Severe eCPM crash → Demand or pricing issue")
+    anomaly_found = True
+
+if fill_change < -25:
+    st.error("🚩 Fill rate collapse → Requests not monetizing")
+    anomaly_found = True
+
+if not anomaly_found:
+    st.success("✅ No critical anomalies detected")
+
+# ---------------- EXECUTIVE SUMMARY ----------------
+st.divider()
+st.header("📌 Executive Summary")
+
+st.markdown(f"""
+### {status}
+
+**Date:** {selected_date}
+
+**Revenue:** {today_rev:,.0f}  
+**Revenue Change:** {rev_change:.1f}%  
+**eCPM Change:** {ecpm_change:.1f}%  
+**Fill Rate Change:** {fill_change:.1f}%  
+**Traffic Change:** {imps_change:.1f}%  
+
+### 🧠 Key Insight
+Revenue impact today is primarily driven by **{primary_issue}**.
+
+### 🎯 Recommended Action
+- Investigate **{primary_issue}**
+- Validate demand, pricing & traffic quality
+- Monitor closely over next 24 hours
+""")
+
+# ---------------- TREND VIEW ----------------
+st.divider()
+st.subheader("📈 Revenue Trend (Last 14 Days)")
+
+trend_df = df.sort_values("Date").tail(14)
+
+st.line_chart(
+    trend_df.set_index("Date")["Revenue"]
+)
