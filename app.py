@@ -13,7 +13,15 @@ st.title("📊 AdTech Site Health Dashboard")
 # ---------------- LOAD DATA ----------------
 @st.cache_data
 def load_data():
-    df = pd.read_csv("single_site_health_scored.csv")
+    uploaded_file = st.file_uploader("Upload Site Health CSV", type="csv")
+
+if uploaded_file is None:
+    st.warning("Please upload the CSV file")
+    st.stop()
+
+df = pd.read_csv(uploaded_file)
+df["Date"] = pd.to_datetime(df["Date"])
+
     df["Date"] = pd.to_datetime(df["Date"])
     return df
 
