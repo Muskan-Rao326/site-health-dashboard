@@ -3,10 +3,14 @@ import pandas as pd
 import numpy as np
 
 # ================= CONFIG =================
-st.set_page_config(page_title="Site Health Monitor", layout="wide")
+st.set_page_config(
+    page_title="Site Health Monitor",
+    layout="wide"
+)
+
 st.title("📊 AdTech Site Health Dashboard")
 
-REVENUE_DIVISOR = 1_000_000   # micros → real currency
+REVENUE_DIVISOR = 1_000_000   # micros → currency
 BASELINE_DAYS = 7
 
 # ================= LOAD DATA =================
@@ -14,19 +18,16 @@ BASELINE_DAYS = 7
 def load_data(file):
     df = pd.read_csv(file)
 
-    # Normalize column names
-    df.columns = (
-        df.columns.str.strip().str.lower().str.replace(" ", "_")
-    )
+    # Normalize columns
+    df.columns = df.columns.str.strip().str.lower().str.replace(" ", "_")
 
-    # Date
     df["date"] = pd.to_datetime(df["date"])
 
-    # -------- FIX UNITS --------
+    # Fix revenue units
     if df["revenue"].median() > 10_000:
         df["revenue"] = df["revenue"] / REVENUE_DIVISOR
 
-    # Recalculate eCPM (never trust API value)
+    # Recalculate eCPM (source of truth)
     df["ecpm"] = (df["revenue"] / df["impressions"]) * 1000
 
     return df.sort_values("date")
@@ -34,7 +35,7 @@ def load_data(file):
 
 uploaded_file = st.file_uploader("📤 Upload Site Health CSV", type="csv")
 if uploaded_file is None:
-    st.warning("Please upload the CSV file")
+    st.warning("Please upload a CSV file")
     st.stop()
 
 df = load_data(uploaded_file)
@@ -45,7 +46,7 @@ day_df = df[df["date"] == pd.to_datetime(selected_date)]
 history_df = df[df["date"] < pd.to_datetime(selected_date)]
 
 if day_df.empty:
-    st.error("Selected date not found")
+    st.error("Selected date not found in data")
     st.stop()
 
 # ================= HYBRID STRATEGY =================
@@ -53,13 +54,12 @@ st.divider()
 st.subheader("🧠 Monitoring Mode")
 
 if len(history_df) < BASELINE_DAYS:
-    st.info("⚪ Learning Mode: Not enough history (minimum 7 days required)")
     mode = "learning"
+    st.info("⚪ Learning Mode — insufficient historical data")
 else:
-    baseline_df = history_df.tail(BASELINE_DAYS)
     mode = "rolling"
-
-st.write(f"**Current Mode:** `{mode.upper()}`")
+    baseline_df = history_df.tail(BASELINE_DAYS)
+    st.success("🟢 Rolling Baseline Mode (Last 7 Days)")
 
 # ================= CORE METRICS =================
 today_rev = day_df["revenue"].sum()
@@ -97,54 +97,116 @@ else:
     health_score = None
 
 # ================= STATUS =================
+st.divider()
+st.subheader("🚦 Site Health")
+
 if mode == "learning":
-    status = "⚪ LEARNING MODE"
-elif health_score >= 80:
-    status = "🟢 HEALTHY"
-elif health_score >= 60:
-    status = "🟡 NEEDS ATTENTION"
+    st.info("⚪ LEARNING MODE — building baseline")
 else:
-    status = "🔴 CRITICAL"
+    st.progress(health_score / 100)
 
-st.markdown("## 🚦 Site Health Status")
-if "🟢" in status:
-    st.success(f"{status} | Score: {health_score:.1f}/100")
-elif "🟡" in status:
-    st.warning(f"{status} | Score: {health_score:.1f}/100")
-elif "🔴" in status:
-    st.error(f"{status} 🚨 | Score: {health_score:.1f}/100")
-else:
-    st.info(status)
+    if health_score >= 80:
+        st.success(f"🟢 HEALTHY — {health_score:.1f}/100")
+    elif health_score >= 60:
+        st.warning(f"🟡 NEEDS ATTENTION — {health_score:.1f}/100")
+    else:
+        st.error(f"🔴 CRITICAL — {health_score:.1f}/100")
 
-# ================= KPI =================
-col1, col2, col3, col4 = st.columns(4)
+# ================= KPI CARDS =================
+st.divider()
+st.subheader("📌 Key Metrics")
 
-col1.metric("Revenue", f"{today_rev:,.2f}", f"{rev_change:.1f}%")
-col2.metric("eCPM", f"{today_ecpm:.2f}", f"{ecpm_change:.1f}%")
-col3.metric("Fill Rate", f"{fill_today:.2%}", f"{fill_change:.1f}%")
-col4.metric("Impressions", f"{today_imps:,.0f}", f"{imps_change:.1f}%")
+c1, c2, c3, c4 = st.columns(4)
+c1.metric("Revenue", f"{today_rev:,.2f}", f"{rev_change:.1f}%")
+c2.metric("eCPM", f"{today_ecpm:,.2f}", f"{ecpm_change:.1f}%")
+c3.metric("Fill Rate", f"{fill_today:.2%}", f"{fill_change:.1f}%")
+c4.metric("Impressions", f"{today_imps:,.0f}", f"{imps_change:.1f}%")
+
+# ================= REVENUE DECOMPOSITION =================
+if mode == "rolling":
+    st.divider()
+    st.subheader("🧩 Revenue Change Decomposition")
+
+    imps_contribution = imps_change
+    ecpm_contribution = ecpm_change
+
+    decomp_df = pd.DataFrame({
+        "Driver": ["Traffic", "eCPM"],
+        "Impact (%)": [imps_contribution, ecpm_contribution]
+    }).set_index("Driver")
+
+    st.bar_chart(decomp_df)
 
 # ================= ROOT CAUSE =================
 if mode == "rolling":
     st.divider()
-    st.subheader("🧩 Revenue Root Cause Ranking")
+    st.subheader("🔥 Root Cause Impact")
 
-    root_causes = {
-        "eCPM": ecpm_change * 0.5,
-        "Fill Rate": fill_change * 0.3,
-        "Traffic": imps_change * 0.2
-    }
+    root_df = pd.DataFrame({
+        "Metric": ["eCPM", "Fill Rate", "Traffic"],
+        "Impact Strength": [
+            abs(ecpm_change) * 0.5,
+            abs(fill_change) * 0.3,
+            abs(imps_change) * 0.2
+        ]
+    }).set_index("Metric")
 
-    root_df = (
-        pd.DataFrame.from_dict(root_causes, orient="index", columns=["Impact"])
-        .sort_values("Impact")
-    )
+    st.bar_chart(root_df)
 
-    st.dataframe(root_df)
-    primary_issue = root_df.index[0]
-    st.warning(f"Primary revenue impact driven by **{primary_issue}**")
+    primary_issue = root_df["Impact Strength"].idxmax()
+    st.warning(f"🎯 Primary revenue impact driven by **{primary_issue}**")
 
-# ================= TREND =================
+# ================= ANOMALY DETECTION =================
+st.divider()
+st.subheader("🚨 Risk & Anomaly Detection")
+
+risk = False
+
+if ecpm_change < -25:
+    st.error("🚩 Sharp eCPM drop — demand or pricing issue")
+    risk = True
+
+if fill_change < -20:
+    st.error("🚩 Fill rate collapse — monetization or setup issue")
+    risk = True
+
+if imps_change > 20 and rev_change < -20:
+    st.error("🚩 Traffic spike but revenue drop — possible low-quality traffic")
+    risk = True
+
+if not risk:
+    st.success("✅ No major anomalies detected")
+
+# ================= TRENDS =================
 st.divider()
 st.subheader("📈 Revenue Trend (Last 14 Days)")
-st.line_chart(df.set_index("date")["revenue"].tail(14))
+
+trend_df = df.tail(14).set_index("date")[["revenue"]]
+st.line_chart(trend_df)
+
+# ================= EXECUTIVE SUMMARY =================
+st.divider()
+st.subheader("🧠 Executive Summary")
+
+if mode == "rolling":
+    st.markdown(f"""
+**Date:** {selected_date}
+
+• Revenue changed **{rev_change:.1f}%**  
+• Primary driver: **{primary_issue}**  
+• Health score: **{health_score:.1f}/100**
+
+**Recommended Actions**
+- Investigate **{primary_issue}**
+- Validate demand & pricing
+- Monitor next 24 hours
+""")
+else:
+    st.markdown("""
+Baseline is still building.
+
+Once 7 days of data are available:
+- Health scoring
+- Root-cause detection
+- Anomaly alerts will activate
+""")
