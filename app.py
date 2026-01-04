@@ -1,212 +1,137 @@
 import streamlit as st
 import pandas as pd
 import numpy as np
+import plotly.express as px
 
-# ================= CONFIG =================
+# ---------------- PAGE CONFIG ----------------
 st.set_page_config(
-    page_title="Site Health Monitor",
+    page_title="Ad Traffic Fraud Intelligence",
     layout="wide"
 )
 
-st.title("📊 AdTech Site Health Dashboard")
+st.title("🛡️ Ad Traffic Fraud Intelligence Dashboard")
 
-REVENUE_DIVISOR = 1_000_000   # micros → currency
-BASELINE_DAYS = 7
-
-# ================= LOAD DATA =================
+# ---------------- LOAD DATA ----------------
 @st.cache_data
-def load_data(file):
-    df = pd.read_csv(file)
+def load_data():
+    # Replace this with your combined_df loading logic
+    # Example: pd.read_csv("combined_data.csv")
+    return combined_df.copy()
 
-    # Normalize columns
-    df.columns = df.columns.str.strip().str.lower().str.replace(" ", "_")
+df = load_data()
 
-    df["date"] = pd.to_datetime(df["date"])
+# ---------------- SIDEBAR FILTERS ----------------
+st.sidebar.header("🔍 Filters")
 
-    # Fix revenue units
-    if df["revenue"].median() > 10_000:
-        df["revenue"] = df["revenue"] / REVENUE_DIVISOR
+site = st.sidebar.selectbox(
+    "Select Site",
+    ["All"] + sorted(df["site_name"].unique().tolist())
+)
 
-    # Recalculate eCPM (source of truth)
-    df["ecpm"] = (df["revenue"] / df["impressions"]) * 1000
+date_range = st.sidebar.date_input(
+    "Date Range",
+    [df["date"].min(), df["date"].max()]
+)
 
-    return df.sort_values("date")
+if site != "All":
+    df = df[df["site_name"] == site]
 
+df = df[
+    (df["date"] >= pd.to_datetime(date_range[0])) &
+    (df["date"] <= pd.to_datetime(date_range[1]))
+]
 
-uploaded_file = st.file_uploader("📤 Upload Site Health CSV", type="csv")
-if uploaded_file is None:
-    st.warning("Please upload a CSV file")
-    st.stop()
+# ---------------- KPI SECTION ----------------
+st.subheader("📌 Key Fraud KPIs")
 
-df = load_data(uploaded_file)
+col1, col2, col3, col4 = st.columns(4)
 
-# ================= DATE =================
-selected_date = st.date_input("📅 Select Date", df["date"].max().date())
-day_df = df[df["date"] == pd.to_datetime(selected_date)]
-history_df = df[df["date"] < pd.to_datetime(selected_date)]
+col1.metric("Avg Fraud Score", round(df["fraud_score"].mean(), 1))
+col2.metric("High Risk Days", (df["fraud_label"] == "High Risk").sum())
+col3.metric("Fraud Likely Days", (df["fraud_label"] == "Fraud Likely").sum())
+col4.metric("Avg RPM", f"${df['rpm'].mean():.2f}")
 
-if day_df.empty:
-    st.error("Selected date not found in data")
-    st.stop()
+# ---------------- FRAUD SCORE TREND ----------------
+st.subheader("📈 Fraud Score Trend")
 
-# ================= HYBRID STRATEGY =================
-st.divider()
-st.subheader("🧠 Monitoring Mode")
+fig_trend = px.line(
+    df,
+    x="date",
+    y="fraud_score",
+    color="site_name",
+    title="Fraud Score Over Time",
+    markers=True
+)
+st.plotly_chart(fig_trend, use_container_width=True)
 
-if len(history_df) < BASELINE_DAYS:
-    mode = "learning"
-    st.info("⚪ Learning Mode — insufficient historical data")
-else:
-    mode = "rolling"
-    baseline_df = history_df.tail(BASELINE_DAYS)
-    st.success("🟢 Rolling Baseline Mode (Last 7 Days)")
+# ---------------- FRAUD DISTRIBUTION ----------------
+st.subheader("🚨 Fraud Classification Distribution")
 
-# ================= CORE METRICS =================
-today_rev = day_df["revenue"].sum()
-today_imps = day_df["impressions"].sum()
-today_req = day_df["adrequests"].sum()
+fig_dist = px.histogram(
+    df,
+    x="fraud_label",
+    color="fraud_label",
+    title="Fraud Risk Distribution"
+)
+st.plotly_chart(fig_dist, use_container_width=True)
 
-today_ecpm = (today_rev / today_imps) * 1000 if today_imps > 0 else 0
-fill_today = today_imps / today_req if today_req > 0 else 0
+# ---------------- SIGNAL BREAKDOWN ----------------
+st.subheader("🧠 Fraud Signal Breakdown")
 
-if mode == "rolling":
-    base_rev = baseline_df["revenue"].mean()
-    base_imps = baseline_df["impressions"].mean()
-    base_req = baseline_df["adrequests"].mean()
+signal_cols = [
+    "traffic_quality_issue",
+    "monetization_anomaly",
+    "ivt_lite",
+    "revenue_manipulation"
+]
 
-    base_ecpm = (baseline_df["revenue"].sum() / baseline_df["impressions"].sum()) * 1000
-    fill_base = base_imps / base_req if base_req > 0 else 0
+signal_summary = df[signal_cols].sum().reset_index()
+signal_summary.columns = ["Signal", "Count"]
 
-    rev_change = (today_rev - base_rev) / base_rev * 100
-    imps_change = (today_imps - base_imps) / base_imps * 100
-    ecpm_change = (today_ecpm - base_ecpm) / base_ecpm * 100
-    fill_change = (fill_today - fill_base) / fill_base * 100
-else:
-    rev_change = imps_change = ecpm_change = fill_change = 0
+fig_signals = px.bar(
+    signal_summary,
+    x="Signal",
+    y="Count",
+    title="Fraud Signals Triggered"
+)
+st.plotly_chart(fig_signals, use_container_width=True)
 
-# ================= HEALTH SCORE =================
-if mode == "rolling":
-    health_score = (
-        (100 + rev_change) * 0.50 +
-        (100 + ecpm_change) * 0.25 +
-        (100 + fill_change) * 0.15 +
-        (100 + imps_change) * 0.10
-    )
-    health_score = max(0, min(100, health_score))
-else:
-    health_score = None
+# ---------------- METRIC CORRELATION ----------------
+st.subheader("🔗 Key Metric Relationships")
 
-# ================= STATUS =================
-st.divider()
-st.subheader("🚦 Site Health")
+fig_scatter = px.scatter(
+    df,
+    x="engagement_rate",
+    y="ctr",
+    size="sessions",
+    color="fraud_label",
+    title="CTR vs Engagement (Bubble = Sessions)",
+)
+st.plotly_chart(fig_scatter, use_container_width=True)
 
-if mode == "learning":
-    st.info("⚪ LEARNING MODE — building baseline")
-else:
-    st.progress(health_score / 100)
+# ---------------- DETAILED TABLE ----------------
+st.subheader("📋 Detailed Fraud Table")
 
-    if health_score >= 80:
-        st.success(f"🟢 HEALTHY — {health_score:.1f}/100")
-    elif health_score >= 60:
-        st.warning(f"🟡 NEEDS ATTENTION — {health_score:.1f}/100")
-    else:
-        st.error(f"🔴 CRITICAL — {health_score:.1f}/100")
+table_cols = [
+    "date",
+    "site_name",
+    "fraud_score",
+    "fraud_label",
+    "sessions",
+    "engagement_rate",
+    "ctr",
+    "ecpm",
+    "rpm",
+    "traffic_quality_issue",
+    "monetization_anomaly",
+    "ivt_lite",
+    "revenue_manipulation"
+]
 
-# ================= KPI CARDS =================
-st.divider()
-st.subheader("📌 Key Metrics")
+st.dataframe(
+    df[table_cols].sort_values("fraud_score", ascending=False),
+    use_container_width=True
+)
 
-c1, c2, c3, c4 = st.columns(4)
-c1.metric("Revenue", f"{today_rev:,.2f}", f"{rev_change:.1f}%")
-c2.metric("eCPM", f"{today_ecpm:,.2f}", f"{ecpm_change:.1f}%")
-c3.metric("Fill Rate", f"{fill_today:.2%}", f"{fill_change:.1f}%")
-c4.metric("Impressions", f"{today_imps:,.0f}", f"{imps_change:.1f}%")
-
-# ================= REVENUE DECOMPOSITION =================
-if mode == "rolling":
-    st.divider()
-    st.subheader("🧩 Revenue Change Decomposition")
-
-    imps_contribution = imps_change
-    ecpm_contribution = ecpm_change
-
-    decomp_df = pd.DataFrame({
-        "Driver": ["Traffic", "eCPM"],
-        "Impact (%)": [imps_contribution, ecpm_contribution]
-    }).set_index("Driver")
-
-    st.bar_chart(decomp_df)
-
-# ================= ROOT CAUSE =================
-if mode == "rolling":
-    st.divider()
-    st.subheader("🔥 Root Cause Impact")
-
-    root_df = pd.DataFrame({
-        "Metric": ["eCPM", "Fill Rate", "Traffic"],
-        "Impact Strength": [
-            abs(ecpm_change) * 0.5,
-            abs(fill_change) * 0.3,
-            abs(imps_change) * 0.2
-        ]
-    }).set_index("Metric")
-
-    st.bar_chart(root_df)
-
-    primary_issue = root_df["Impact Strength"].idxmax()
-    st.warning(f"🎯 Primary revenue impact driven by **{primary_issue}**")
-
-# ================= ANOMALY DETECTION =================
-st.divider()
-st.subheader("🚨 Risk & Anomaly Detection")
-
-risk = False
-
-if ecpm_change < -25:
-    st.error("🚩 Sharp eCPM drop — demand or pricing issue")
-    risk = True
-
-if fill_change < -20:
-    st.error("🚩 Fill rate collapse — monetization or setup issue")
-    risk = True
-
-if imps_change > 20 and rev_change < -20:
-    st.error("🚩 Traffic spike but revenue drop — possible low-quality traffic")
-    risk = True
-
-if not risk:
-    st.success("✅ No major anomalies detected")
-
-# ================= TRENDS =================
-st.divider()
-st.subheader("📈 Revenue Trend (Last 14 Days)")
-
-trend_df = df.tail(14).set_index("date")[["revenue"]]
-st.line_chart(trend_df)
-
-# ================= EXECUTIVE SUMMARY =================
-st.divider()
-st.subheader("🧠 Executive Summary")
-
-if mode == "rolling":
-    st.markdown(f"""
-**Date:** {selected_date}
-
-• Revenue changed **{rev_change:.1f}%**  
-• Primary driver: **{primary_issue}**  
-• Health score: **{health_score:.1f}/100**
-
-**Recommended Actions**
-- Investigate **{primary_issue}**
-- Validate demand & pricing
-- Monitor next 24 hours
-""")
-else:
-    st.markdown("""
-Baseline is still building.
-
-Once 7 days of data are available:
-- Health scoring
-- Root-cause detection
-- Anomaly alerts will activate
-""")
+# ---------------- FOOTER ----------------
+st.caption("⚠️ Fraud scores are probabilistic signals, not billing decisions.")
