@@ -2,6 +2,7 @@ import streamlit as st
 import pandas as pd
 import numpy as np
 import plotly.express as px
+import os
 
 # ---------------- PAGE CONFIG ----------------
 st.set_page_config(
@@ -11,14 +12,34 @@ st.set_page_config(
 
 st.title("🛡️ Ad Traffic Fraud Intelligence Dashboard")
 
-# ---------------- LOAD DATA ----------------
+# ---------------- LOAD LOCAL DATA ----------------
 @st.cache_data
 def load_data():
-    # Replace this with your combined_df loading logic
-    # Example: pd.read_csv("combined_data.csv")
-    return combined_df.copy()
+    file_path = "data/combined_data.csv"
 
-df = load_data()
+    if not os.path.exists(file_path):
+        st.error("❌ No local data file found and no file uploaded.")
+        st.stop()
+
+    df = pd.read_csv(file_path)
+    df["date"] = pd.to_datetime(df["date"])
+    return df
+
+
+# ---------------- SIDEBAR: FILE UPLOADER ----------------
+st.sidebar.subheader("📂 Upload Data")
+
+uploaded_file = st.sidebar.file_uploader(
+    "Upload combined_data.csv",
+    type=["csv"]
+)
+
+if uploaded_file is not None:
+    df = pd.read_csv(uploaded_file)
+    df["date"] = pd.to_datetime(df["date"])
+else:
+    df = load_data()
+
 
 # ---------------- SIDEBAR FILTERS ----------------
 st.sidebar.header("🔍 Filters")
@@ -59,8 +80,8 @@ fig_trend = px.line(
     x="date",
     y="fraud_score",
     color="site_name",
-    title="Fraud Score Over Time",
-    markers=True
+    markers=True,
+    title="Fraud Score Over Time"
 )
 st.plotly_chart(fig_trend, use_container_width=True)
 
@@ -105,7 +126,7 @@ fig_scatter = px.scatter(
     y="ctr",
     size="sessions",
     color="fraud_label",
-    title="CTR vs Engagement (Bubble = Sessions)",
+    title="CTR vs Engagement (Bubble = Sessions)"
 )
 st.plotly_chart(fig_scatter, use_container_width=True)
 
