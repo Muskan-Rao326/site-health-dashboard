@@ -4,9 +4,9 @@ import numpy as np
 import altair as alt
 from datetime import timedelta
 
-# =========================
+# =====================================================
 # PAGE CONFIG
-# =========================
+# =====================================================
 st.set_page_config(
     page_title="Revenue Intelligence Dashboard",
     layout="wide"
@@ -14,243 +14,214 @@ st.set_page_config(
 
 st.title("📊 Revenue Intelligence & Root Cause Dashboard")
 
-# =========================
-# LOAD DATA
-# =========================
-uploaded_file = st.file_uploader("📂 Upload daily metrics CSV", type=["csv"])
+# =====================================================
+# FILE UPLOAD
+# =====================================================
+uploaded_file = st.sidebar.file_uploader(
+    "📂 Upload Daily Metrics CSV",
+    type=["csv"]
+)
 
 if not uploaded_file:
-    st.info("Upload a CSV file to begin analysis.")
+    st.info("Please upload a valid daily metrics CSV file.")
     st.stop()
 
 df = pd.read_csv(uploaded_file)
+
+# =====================================================
+# DATA CLEANING & VALIDATION
+# =====================================================
 df.columns = df.columns.str.lower().str.strip()
 df["date"] = pd.to_datetime(df["date"])
 df = df.sort_values("date")
 
-# =========================
-# DATE DEFINITIONS
-# =========================
+REQUIRED_COLS = [
+    "date", "site_name", "sessions", "revenue", "ecpm",
+    "ctr", "fill_rate", "viewability", "engagement_rate",
+    "pageviews_per_session", "impressions_per_session",
+    "clicks_per_session"
+]
+
+missing = set(REQUIRED_COLS) - set(df.columns)
+if missing:
+    st.error(f"Missing required columns: {missing}")
+    st.stop()
+
+# =====================================================
+# SIDEBAR FILTERS
+# =====================================================
+st.sidebar.header("🔍 Filters")
+
+site = st.sidebar.selectbox(
+    "Select Site",
+    sorted(df["site_name"].unique())
+)
+
+df = df[df["site_name"] == site]
+
+baseline_days = st.sidebar.slider(
+    "Baseline window (days)",
+    min_value=7,
+    max_value=30,
+    value=14
+)
+
+# =====================================================
+# DAY DEFINITIONS
+# =====================================================
 latest_day = df["date"].max()
 yesterday = latest_day - timedelta(days=1)
 
 today_df = df[df["date"] == latest_day]
 yesterday_df = df[df["date"] == yesterday]
+baseline_df = df[df["date"] < latest_day].tail(baseline_days)
 
 if today_df.empty or yesterday_df.empty:
-    st.error("Not enough data for Today vs Yesterday comparison.")
+    st.error("Not enough data to compare today vs yesterday.")
     st.stop()
 
-# =========================
-# BASELINE RANGE (USER SELECTABLE)
-# =========================
-st.sidebar.subheader("📅 Baseline Selection")
-
-min_date = df["date"].min()
-max_date = df["date"].max() - timedelta(days=2)
-
-baseline_range = st.sidebar.date_input(
-    "Select baseline date range",
-    [min_date, max_date],
-    min_value=min_date,
-    max_value=max_date
-)
-
-baseline_df = df[
-    (df["date"] >= pd.to_datetime(baseline_range[0])) &
-    (df["date"] <= pd.to_datetime(baseline_range[1]))
-]
-
-# =========================
-# METRICS WE CARE ABOUT
-# =========================
+# =====================================================
+# METRIC LIST
+# =====================================================
 METRICS = [
-    "revenue", "ecpm", "impressions", "ad_requests",
-    "ctr", "viewability"
+    "revenue", "ecpm", "sessions",
+    "ctr", "fill_rate", "viewability",
+    "engagement_rate",
+    "pageviews_per_session",
+    "impressions_per_session",
+    "clicks_per_session"
 ]
 
-# =========================
-# KPI CALCULATIONS
-# =========================
-def get_today(metric):
-    return today_df[metric].values[0]
+# =====================================================
+# METRIC COMPARISON FUNCTION
+# =====================================================
+def compare(metric):
+    today = today_df[metric].values[0]
+    yesterday_val = yesterday_df[metric].values[0]
+    baseline_mean = baseline_df[metric].mean()
 
-def get_yesterday(metric):
-    return yesterday_df[metric].values[0]
+    return {
+        "today": today,
+        "vs_yesterday_pct": ((today - yesterday_val) / yesterday_val) * 100,
+        "vs_baseline_pct": ((today - baseline_mean) / baseline_mean) * 100
+    }
 
-def get_delta(metric):
-    return get_today(metric) - get_yesterday(metric)
+signals = {m: compare(m) for m in METRICS}
 
-def get_pct_change(metric):
-    y = get_yesterday(metric)
-    if y == 0:
-        return 0
-    return (get_today(metric) - y) / y * 100
+# =====================================================
+# KPI ROW (EXECUTIVE VIEW)
+# =====================================================
+st.subheader("📌 Executive Snapshot")
 
-def baseline_mean(metric):
-    return baseline_df[metric].mean()
+col1, col2, col3, col4 = st.columns(4)
 
-# =========================
-# EXECUTIVE KPI ROW
-# =========================
-st.subheader("📌 Executive Snapshot (Today vs Yesterday)")
-
-c1, c2, c3, c4 = st.columns(4)
-
-c1.metric(
+col1.metric(
     "Revenue",
-    f"${get_today('revenue'):,.2f}",
-    f"{get_delta('revenue'):+,.2f} ({get_pct_change('revenue'):+.1f}%)"
+    f"${signals['revenue']['today']:.2f}",
+    f"{signals['revenue']['vs_yesterday_pct']:.1f}% vs Yesterday"
 )
 
-c2.metric(
+col2.metric(
     "eCPM",
-    f"${get_today('ecpm'):,.2f}",
-    f"{get_delta('ecpm'):+.2f}"
+    f"${signals['ecpm']['today']:.2f}",
+    f"{signals['ecpm']['vs_yesterday_pct']:.1f}% vs Yesterday"
 )
 
-c3.metric(
-    "Impressions",
-    f"{int(get_today('impressions')):,}",
-    f"{int(get_delta('impressions')):+,}"
+col3.metric(
+    "Sessions",
+    int(signals['sessions']['today']),
+    f"{signals['sessions']['vs_yesterday_pct']:.1f}% vs Yesterday"
 )
 
-c4.metric(
+col4.metric(
     "Viewability",
-    f"{get_today('viewability'):.2f}%",
-    f"{get_delta('viewability'):+.2f}%"
+    f"{signals['viewability']['today']:.1f}%",
+    f"{signals['viewability']['vs_yesterday_pct']:.1f}% vs Yesterday"
 )
 
-st.caption(
-    f"Baseline revenue avg: ${baseline_mean('revenue'):,.2f}"
+# =====================================================
+# ROOT CAUSE LOGIC (RULE-BASED, STABLE)
+# =====================================================
+ecpm_down = signals["ecpm"]["vs_baseline_pct"] < -10
+traffic_flat = abs(signals["sessions"]["vs_baseline_pct"]) < 5
+quality_ok = (
+    signals["ctr"]["vs_baseline_pct"] > -5 and
+    signals["viewability"]["vs_baseline_pct"] > -5
 )
 
-# =========================
-# ROOT CAUSE ANALYSIS
-# =========================
-traffic_drop = get_pct_change("impressions") < -15
-ecpm_up = get_pct_change("ecpm") > 5
-quality_stable = get_pct_change("viewability") > -5 and get_pct_change("ctr") > -5
-
-if traffic_drop and ecpm_up and quality_stable:
-    cause = "🔴 Traffic Collapse"
-    explanation = (
-        "Revenue declined primarily due to a sharp drop in traffic volume. "
-        "eCPM increased, indicating advertisers paid more for fewer impressions. "
-        "This is a volume-driven revenue loss, not a quality issue."
-    )
-
-elif get_pct_change("ecpm") < -10:
+if ecpm_down and traffic_flat and quality_ok:
     cause = "🔴 Monetization Pressure"
-    explanation = (
-        "Revenue declined mainly due to a significant drop in eCPM. "
-        "This suggests reduced advertiser demand, pricing pressure, or auction softening."
-    )
-
-elif get_pct_change("viewability") < -10:
-    cause = "🔴 Delivery / Visibility Issue"
-    explanation = (
-        "Revenue decline is linked to reduced ad viewability, "
-        "which directly impacts advertiser bidding and CPMs."
-    )
-
+    reason = "eCPM dropped while traffic & quality stayed stable."
+elif signals["sessions"]["vs_baseline_pct"] < -10:
+    cause = "🔴 Traffic Loss"
+    reason = "Revenue decline driven by lower traffic."
+elif signals["fill_rate"]["vs_baseline_pct"] < -10:
+    cause = "🔴 Demand / Fill Issue"
+    reason = "Lower fill rate reduced monetization."
 else:
     cause = "🟡 Normal Market Movement"
-    explanation = (
-        "Daily changes fall within expected historical variation. "
-        "No structural monetization or traffic issues detected."
-    )
+    reason = "All changes are within expected variance."
 
 st.markdown(f"### **Primary Cause: {cause}**")
-st.info(explanation)
+st.info(reason)
 
-# =========================
+# =====================================================
 # STORYTELLING CHARTS
-# =========================
-st.subheader("📈 What Changed Over Time")
+# =====================================================
+st.subheader("📈 What Changed & Why")
 
-# Revenue vs Impressions
-rev_imp = df.melt(
+def line_chart(metric, title):
+    return alt.Chart(df).mark_line(point=True).encode(
+        x="date:T",
+        y=metric,
+        tooltip=["date", metric]
+    ).properties(title=title)
+
+st.altair_chart(
+    line_chart("revenue", "Revenue Trend") +
+    line_chart("ecpm", "eCPM Trend"),
+    use_container_width=True
+)
+
+st.altair_chart(
+    line_chart("sessions", "Traffic Trend"),
+    use_container_width=True
+)
+
+quality_df = df.melt(
     id_vars="date",
-    value_vars=["revenue", "impressions"],
+    value_vars=["ctr", "viewability", "engagement_rate"],
     var_name="metric",
     value_name="value"
 )
 
-chart1 = alt.Chart(rev_imp).mark_line().encode(
-    x="date:T",
-    y="value:Q",
-    color="metric:N",
-    tooltip=["date", "metric", "value"]
-).properties(title="Revenue vs Traffic Volume")
-
-st.altair_chart(chart1, use_container_width=True)
-
-# Revenue vs eCPM
-rev_ecpm = df.melt(
-    id_vars="date",
-    value_vars=["revenue", "ecpm"],
-    var_name="metric",
-    value_name="value"
+st.altair_chart(
+    alt.Chart(quality_df).mark_line().encode(
+        x="date:T",
+        y="value:Q",
+        color="metric:N",
+        tooltip=["date", "metric", "value"]
+    ).properties(title="Traffic Quality Health"),
+    use_container_width=True
 )
 
-chart2 = alt.Chart(rev_ecpm).mark_line().encode(
-    x="date:T",
-    y="value:Q",
-    color="metric:N",
-    tooltip=["date", "metric", "value"]
-).properties(title="Revenue vs eCPM (Monetization Decoupling)")
+# =====================================================
+# DELIVERY INTELLIGENCE
+# =====================================================
+st.subheader("📦 Delivery Efficiency")
 
-st.altair_chart(chart2, use_container_width=True)
-
-# Quality metrics
-quality = df.melt(
-    id_vars="date",
-    value_vars=["ctr", "viewability"],
-    var_name="metric",
-    value_name="value"
+st.altair_chart(
+    alt.Chart(df).mark_line(point=True).encode(
+        x="date:T",
+        y="impressions_per_session:Q",
+        tooltip=["date", "impressions_per_session"]
+    ).properties(title="Impressions per Session"),
+    use_container_width=True
 )
 
-chart3 = alt.Chart(quality).mark_line().encode(
-    x="date:T",
-    y="value:Q",
-    color="metric:N",
-    tooltip=["date", "metric", "value"]
-).properties(title="Traffic Quality Health")
-
-st.altair_chart(chart3, use_container_width=True)
-
-# =========================
-# ACTION CHECKLIST
-# =========================
-st.subheader("🛠 Recommended Actions")
-
-if "Traffic" in cause:
-    st.markdown("""
-    - Audit traffic source losses (SEO, Discover, Social)
-    - Check seasonality & holidays
-    - Compare sessions vs impressions
-    - Validate GA4 & ad stack tracking
-    """)
-
-elif "Monetization" in cause:
-    st.markdown("""
-    - Review floor prices
-    - Analyze advertiser bid density
-    - Check GEO & device demand shifts
-    """)
-
-elif "Visibility" in cause:
-    st.markdown("""
-    - Review ad placements
-    - Check CLS / layout shifts
-    - Audit lazy-loading & viewport logic
-    """)
-
-else:
-    st.markdown("""
-    - No immediate action required
-    - Continue monitoring trends
-    """)
-
-st.caption("Revenue Intelligence Dashboard • Today vs Yesterday vs Baseline • Explainable & Safe")
+# =====================================================
+# FOOTER
+# =====================================================
+st.caption(
+    "Baseline-aware • Yesterday comparison • Root-cause driven • No Z-score abuse"
+)
