@@ -8,11 +8,11 @@ from datetime import timedelta
 # CONFIG
 # =========================
 st.set_page_config(
-    page_title="Revenue Intelligence Dashboard",
+    page_title="Revenue Intelligence System",
     layout="wide"
 )
 
-st.title("📊 Revenue Intelligence & Performance Diagnosis")
+st.title("📊 Revenue Intelligence & Root Cause Engine")
 
 # =========================
 # LOAD DATA
@@ -29,13 +29,13 @@ df["date"] = pd.to_datetime(df["date"])
 df = df.sort_values("date")
 
 # =========================
-# DATE RANGE SELECTION
+# DATE RANGE
 # =========================
 min_date = df["date"].min()
 max_date = df["date"].max()
 
 date_range = st.date_input(
-    "Select baseline date range",
+    "Baseline period (used to learn normal behavior)",
     [min_date, max_date - timedelta(days=1)],
     min_value=min_date,
     max_value=max_date
@@ -44,160 +44,192 @@ date_range = st.date_input(
 baseline_df = df[(df["date"] >= pd.to_datetime(date_range[0])) &
                  (df["date"] <= pd.to_datetime(date_range[1]))]
 
-latest_day = df["date"].max()
-today_df = df[df["date"] == latest_day]
+today = df["date"].max()
+today_df = df[df["date"] == today]
 
 # =========================
-# METRIC DEFINITIONS
+# SAFETY CHECK
 # =========================
-METRICS = {
-    "traffic": ["sessions", "users", "pageviews"],
-    "quality": ["ctr", "engagement_rate", "viewability"],
-    "monetization": ["ecpm", "fill_rate", "revenue"]
-}
+if today_df.empty or len(baseline_df) < 5:
+    st.error("Not enough data for reliable analysis.")
+    st.stop()
+
+# =========================
+# METRIC GROUPS
+# =========================
+TRAFFIC = ["sessions", "users", "pageviews"]
+QUALITY = ["ctr", "viewability", "engagement_rate"]
+DELIVERY = ["fill_rate"]
+MONETIZATION = ["ecpm", "revenue"]
+
+ALL_METRICS = TRAFFIC + QUALITY + DELIVERY + MONETIZATION
 
 # =========================
 # BASELINE STATS
 # =========================
 baseline_stats = {}
-for group in METRICS.values():
-    for m in group:
-        if m in baseline_df.columns:
-            baseline_stats[m] = {
-                "mean": baseline_df[m].mean(),
-                "std": baseline_df[m].std() or 1
-            }
+
+for m in ALL_METRICS:
+    if m in baseline_df.columns:
+        baseline_stats[m] = {
+            "mean": baseline_df[m].mean(),
+            "std": baseline_df[m].std() or 1
+        }
 
 # =========================
-# TODAY VS BASELINE (Z-SCORE)
+# TODAY VS BASELINE
 # =========================
 signals = {}
-for m, stats in baseline_stats.items():
+
+for m, s in baseline_stats.items():
     today_val = today_df[m].values[0]
-    z = (today_val - stats["mean"]) / stats["std"]
+    z = (today_val - s["mean"]) / s["std"]
+    pct = (today_val - s["mean"]) / s["mean"] * 100 if s["mean"] else 0
+
     signals[m] = {
         "today": today_val,
         "z": z,
-        "pct_change": (today_val - stats["mean"]) / stats["mean"] * 100
+        "pct": pct
     }
 
 # =========================
-# REVENUE ROOT CAUSE LOGIC
+# NORMALIZED METRICS
 # =========================
-ecpm_drop = signals.get("ecpm", {}).get("z", 0) < -1.2
+if "revenue" in signals and "sessions" in signals:
+    signals["revenue_per_session"] = {
+        "today": signals["revenue"]["today"] / max(signals["sessions"]["today"], 1),
+        "baseline": baseline_stats["revenue"]["mean"] /
+                    max(baseline_stats["sessions"]["mean"], 1)
+    }
+
+# =========================
+# CORE DETECTION FLAGS
+# =========================
+ecpm_down = signals.get("ecpm", {}).get("z", 0) < -1.2
+revenue_down = signals.get("revenue", {}).get("z", 0) < -1
+traffic_down = signals.get("sessions", {}).get("z", 0) < -1
 traffic_stable = abs(signals.get("sessions", {}).get("z", 0)) < 0.8
-quality_good = (
-    signals.get("ctr", {}).get("z", 0) >= -0.8 and
-    signals.get("viewability", {}).get("z", 0) >= -0.8
+quality_ok = (
+    signals.get("ctr", {}).get("z", 0) > -1 and
+    signals.get("viewability", {}).get("z", 0) > -1
 )
-
-if ecpm_drop and traffic_stable and quality_good:
-    primary_cause = "🔴 Monetization Pressure"
-    explanation = (
-        "Revenue declined mainly due to a significant drop in eCPM while traffic "
-        "and engagement quality remained stable or improved. This indicates "
-        "advertiser-side pricing pressure or demand softening."
-    )
-    confidence = 0.85
-
-elif signals.get("sessions", {}).get("z", 0) < -1:
-    primary_cause = "🔴 Traffic Loss"
-    explanation = (
-        "Revenue declined primarily due to a significant drop in traffic volume. "
-        "Monetization efficiency remains normal."
-    )
-    confidence = 0.8
-
-elif signals.get("fill_rate", {}).get("z", 0) < -1:
-    primary_cause = "🔴 Demand / Fill Issue"
-    explanation = (
-        "Revenue declined due to reduced fill rate, indicating weakened advertiser "
-        "demand or inventory blocking."
-    )
-    confidence = 0.75
-
-else:
-    primary_cause = "🟡 Normal Market Movement"
-    explanation = (
-        "Observed changes fall within normal historical variation. No structural "
-        "issues detected. Continued monitoring recommended."
-    )
-    confidence = 0.6
+fill_down = signals.get("fill_rate", {}).get("z", 0) < -1
 
 # =========================
-# KPI ROW (EXECUTIVE VIEW)
+# ROOT CAUSE ENGINE
+# =========================
+causes = []
+
+if ecpm_down and traffic_stable:
+    causes.append(("Monetization Pressure", 0.9))
+
+if fill_down:
+    causes.append(("Delivery / Demand Loss", 0.8))
+
+if traffic_down:
+    causes.append(("Traffic Volume Drop", 0.85))
+
+if ecpm_down and quality_ok:
+    causes.append(("Advertiser Pricing Softening", 0.7))
+
+if not causes:
+    causes.append(("Normal Market Movement", 0.6))
+
+causes = sorted(causes, key=lambda x: x[1], reverse=True)
+primary_cause, confidence = causes[0]
+
+# =========================
+# DELIVERY INTELLIGENCE
+# =========================
+delivery_note = ""
+
+if ecpm_down and fill_down:
+    delivery_note = "Ads are filling less AND pricing is weaker → Demand-side issue."
+elif ecpm_down and quality_ok:
+    delivery_note = "Ads are visible & engaged but priced lower → Market pressure."
+elif fill_down and not traffic_down:
+    delivery_note = "Inventory not filling → Possible ad blocking, policy, or demand loss."
+else:
+    delivery_note = "No strong delivery anomaly detected."
+
+# =========================
+# HEALTH SCORE (0–100)
+# =========================
+health_score = 100
+for m in ["revenue", "ecpm", "sessions", "fill_rate", "viewability"]:
+    if m in signals:
+        health_score -= min(abs(signals[m]["z"]) * 8, 15)
+
+health_score = max(0, int(health_score))
+
+# =========================
+# ALERTING LOGIC
+# =========================
+if health_score < 50:
+    alert = "🔴 CRITICAL"
+elif health_score < 70:
+    alert = "🟠 WARNING"
+else:
+    alert = "🟢 HEALTHY"
+
+# =========================
+# EXECUTIVE SNAPSHOT
 # =========================
 st.subheader("📌 Executive Snapshot")
 
-col1, col2, col3, col4 = st.columns(4)
+c1, c2, c3, c4, c5 = st.columns(5)
 
-col1.metric(
-    "Revenue",
-    f"${signals['revenue']['today']:.2f}",
-    f"{signals['revenue']['pct_change']:.1f}%"
-)
+c1.metric("Revenue", f"${signals['revenue']['today']:.2f}", f"{signals['revenue']['pct']:.1f}%")
+c2.metric("eCPM", f"${signals['ecpm']['today']:.2f}", f"{signals['ecpm']['pct']:.1f}%")
+c3.metric("Sessions", int(signals['sessions']['today']), f"{signals['sessions']['pct']:.1f}%")
+c4.metric("Health Score", f"{health_score}/100")
+c5.metric("Alert", alert)
 
-col2.metric(
-    "eCPM",
-    f"${signals['ecpm']['today']:.2f}",
-    f"{signals['ecpm']['pct_change']:.1f}%"
-)
+st.markdown(f"### 🧠 Primary Cause: **{primary_cause}**")
+st.info(f"""
+**What changed today?**
 
-col3.metric(
-    "Sessions",
-    int(signals.get("sessions", {}).get("today", 0)),
-    f"{signals.get('sessions', {}).get('pct_change', 0):.1f}%"
-)
+Revenue dropped primarily due to **{primary_cause.lower()}**.
+Traffic levels remained **{'stable' if traffic_stable else 'volatile'}**, while
+monetization efficiency showed **{'clear weakness' if ecpm_down else 'normal behavior'}**.
 
-col4.metric(
-    "Confidence",
-    f"{int(confidence * 100)}%"
-)
+**Delivery insight:** {delivery_note}
 
-st.markdown(f"### **Primary Cause:** {primary_cause}")
-st.info(explanation)
+Confidence: **{int(confidence*100)}%**
+""")
 
 # =========================
 # STORYTELLING CHARTS
 # =========================
-st.subheader("📈 What Changed & Why")
+st.subheader("📈 What changed & why")
 
-# Revenue vs eCPM
-chart1 = alt.Chart(df).mark_line().encode(
-    x="date:T",
-    y="revenue:Q",
-    tooltip=["date", "revenue"]
+# 1️⃣ Revenue vs eCPM (pricing story)
+chart_rev = alt.Chart(df).mark_line().encode(
+    x="date:T", y="revenue:Q"
 ).properties(title="Revenue Trend")
 
-chart2 = alt.Chart(df).mark_line(color="orange").encode(
-    x="date:T",
-    y="ecpm:Q",
-    tooltip=["date", "ecpm"]
+chart_ecpm = alt.Chart(df).mark_line(color="orange").encode(
+    x="date:T", y="ecpm:Q"
 )
 
-st.altair_chart(chart1 + chart2, use_container_width=True)
+st.altair_chart(chart_rev + chart_ecpm, use_container_width=True)
 
-# Sessions vs Revenue (Decoupling)
-chart3 = alt.Chart(df).mark_line().encode(
-    x="date:T",
-    y="sessions:Q",
-    tooltip=["date", "sessions"]
-).properties(title="Traffic vs Revenue Decoupling")
+# 2️⃣ Traffic vs Revenue (decoupling)
+chart_traf = alt.Chart(df).mark_line().encode(
+    x="date:T", y="sessions:Q"
+).properties(title="Traffic Stability Check")
 
-st.altair_chart(chart3, use_container_width=True)
+st.altair_chart(chart_traf, use_container_width=True)
 
-# Quality Metrics
-quality_cols = [c for c in ["ctr", "viewability", "engagement_rate"] if c in df.columns]
+# 3️⃣ Quality health
+quality_cols = [c for c in QUALITY if c in df.columns]
 quality_df = df.melt(id_vars="date", value_vars=quality_cols)
 
-chart4 = alt.Chart(quality_df).mark_line().encode(
-    x="date:T",
-    y="value:Q",
-    color="variable:N",
-    tooltip=["date", "variable", "value"]
-).properties(title="Traffic Quality Health")
+chart_q = alt.Chart(quality_df).mark_line().encode(
+    x="date:T", y="value:Q", color="variable:N"
+).properties(title="Traffic Quality Signals")
 
-st.altair_chart(chart4, use_container_width=True)
+st.altair_chart(chart_q, use_container_width=True)
 
 # =========================
 # ACTION CHECKLIST
@@ -206,31 +238,31 @@ st.subheader("🛠 Recommended Actions")
 
 if "Monetization" in primary_cause:
     st.markdown("""
-    - Check advertiser demand by GEO & device
-    - Review floor price changes
-    - Compare GAM vs exchange bid density
-    - Validate auction pressure logs
+    - Review floor price & bidder competition
+    - Check geo/device eCPM splits
+    - Compare GAM vs exchange demand
+    - Validate auction pressure
+    """)
+
+elif "Delivery" in primary_cause:
+    st.markdown("""
+    - Check fill rate by slot & device
+    - Inspect ad blocking & policy flags
+    - Validate ads.txt & category blocks
     """)
 
 elif "Traffic" in primary_cause:
     st.markdown("""
     - Investigate traffic source drops
-    - Check SEO / Discover / Social referrals
-    - Validate GA4 tagging & consent
-    """)
-
-elif "Demand" in primary_cause:
-    st.markdown("""
-    - Inspect blocked categories / ads.txt
-    - Review brand safety restrictions
-    - Check ad server errors
+    - Validate GA4 / consent changes
+    - Review SEO & Discover trends
     """)
 
 else:
     st.markdown("""
-    - No immediate action required
+    - No action required
     - Monitor next 3–5 days
     - Compare with market benchmarks
     """)
 
-st.caption("Revenue Intelligence Dashboard • Baseline-aware • False-positive protected")
+st.caption("Revenue Intelligence System • Baseline-aware • False-positive protected")
