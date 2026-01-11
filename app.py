@@ -6,23 +6,23 @@ from datetime import timedelta
 from scipy.stats import norm
 
 # =============================
-# PAGE CONFIG
+# CONFIG + STYLE
 # =============================
-st.set_page_config(page_title="Revenue Intelligence (PowerBI Style)", layout="wide")
+st.set_page_config(page_title="Revenue Intelligence (Root Cause)", layout="wide")
 
-# =============================
-# STYLE (PowerBI-ish)
-# =============================
 st.markdown("""
 <style>
-    .report-title { font-size: 26px; font-weight: 800; margin-bottom: 4px; }
-    .report-sub { font-size: 13px; opacity: 0.8; margin-bottom: 14px; }
+    .title { font-size: 26px; font-weight: 800; margin-bottom: 2px; }
+    .sub { font-size: 13px; opacity: 0.8; margin-bottom: 14px; }
     .card { border-radius: 14px; padding: 14px; color: white; }
     .kpi-label { font-size: 13px; opacity: 0.95; }
     .kpi-val { font-size: 26px; font-weight: 800; margin-top: 2px; }
     .kpi-meta { font-size: 12px; opacity: 0.95; margin-top: 6px; }
 </style>
 """, unsafe_allow_html=True)
+
+st.markdown('<div class="title">📊 Revenue Intelligence Dashboard</div>', unsafe_allow_html=True)
+st.markdown('<div class="sub">Root-cause driven by metric decrements (GA4 + GAM) — single-site</div>', unsafe_allow_html=True)
 
 # =============================
 # HELPERS
@@ -46,10 +46,8 @@ def confidence_from_z(z):
     return (1 - p) * 100
 
 def color_from_z(z):
-    if z >= -1:
-        return "#2ECC71"
-    elif z >= -2:
-        return "#F1C40F"
+    if z >= -1: return "#2ECC71"
+    if z >= -2: return "#F1C40F"
     return "#E74C3C"
 
 def kpi_card(title, value, delta_pct, z, conf, suffix=""):
@@ -58,7 +56,7 @@ def kpi_card(title, value, delta_pct, z, conf, suffix=""):
     <div class="card" style="background:{bg}">
         <div class="kpi-label">{title}</div>
         <div class="kpi-val">{value:,.2f}{suffix}</div>
-        <div class="kpi-meta">Δ vs Yesterday: {delta_pct:+.2f}%</div>
+        <div class="kpi-meta">Δ vs Compare: {delta_pct:+.2f}%</div>
         <div class="kpi-meta">Robust Z: {z:.2f} • Confidence: {conf:.1f}%</div>
     </div>
     """
@@ -66,29 +64,58 @@ def kpi_card(title, value, delta_pct, z, conf, suffix=""):
 @st.cache_data
 def load_data(file):
     df = pd.read_csv(file)
+    if "date" not in df.columns:
+        raise ValueError("CSV must contain a 'date' column.")
     df["date"] = pd.to_datetime(df["date"], errors="coerce").dt.normalize()
     df = df.dropna(subset=["date"]).sort_values("date")
     return df
 
-# =============================
-# LOAD
-# =============================
-st.markdown('<div class="report-title">📊 Revenue Intelligence Dashboard</div>', unsafe_allow_html=True)
-st.markdown('<div class="report-sub">PowerBI-style daily reporting (GA4 + GAM) — single-site mode</div>', unsafe_allow_html=True)
+def line_chart(df, cols, title):
+    d = df[["date"] + cols].copy()
+    melted = d.melt(id_vars="date", value_vars=cols, var_name="metric", value_name="value")
+    return alt.Chart(melted).mark_line(point=True).encode(
+        x=alt.X("date:T", title="Date"),
+        y=alt.Y("value:Q", title="Value"),
+        color=alt.Color("metric:N", title="Metric"),
+        tooltip=["date:T", "metric:N", "value:Q"]
+    ).properties(title=title, height=270)
 
+def waterfall_like(df_steps, title):
+    # df_steps columns: Step, Value
+    df = df_steps.copy()
+    df["Cumulative"] = df["Value"].cumsum()
+    df["Start"] = df["Cumulative"] - df["Value"]
+
+    chart = alt.Chart(df).mark_bar().encode(
+        x=alt.X("Step:N", sort=None),
+        y=alt.Y("Start:Q", title="Value"),
+        y2="Cumulative:Q",
+        tooltip=["Step", alt.Tooltip("Value:Q", format=",.2f")]
+    ).properties(title=title, height=270)
+    return chart
+
+# =============================
+# LOAD CSV
+# =============================
 uploaded = st.file_uploader("Upload merged GA4 + GAM CSV", type=["csv"])
 if not uploaded:
     st.stop()
 
 df_raw = load_data(uploaded)
 
-# Single site
+# Single site mode
 if "site_name" in df_raw.columns:
-    site = sorted(df_raw["site_name"].dropna().unique().tolist())[0]
+    sites = sorted(df_raw["site_name"].dropna().unique().tolist())
+    if len(sites) == 0:
+        st.error("No site_name values found.")
+        st.stop()
+    site = sites[0]
     df_raw = df_raw[df_raw["site_name"] == site].copy()
     st.caption(f"Using site: **{site}**")
+else:
+    st.caption("No site_name column found; assuming already single-site.")
 
-# Required additive
+# Required additive columns
 base_cols = ["revenue","ad_requests","impressions","clicks","sessions","users","pageviews"]
 missing = [c for c in base_cols if c not in df_raw.columns]
 if missing:
@@ -98,18 +125,19 @@ if missing:
 for c in base_cols:
     df_raw[c] = pd.to_numeric(df_raw[c], errors="coerce").fillna(0.0)
 
+# Daily totals (truth)
 daily = df_raw.groupby("date", as_index=False)[base_cols].sum().sort_values("date")
 
-# Derived (truth)
+# Derived
 daily["ecpm"] = daily.apply(lambda r: safe_div(r["revenue"], r["impressions"], 1000), axis=1)
-daily["ctr"] = daily.apply(lambda r: safe_div(r["clicks"], r["impressions"], 100), axis=1)
 daily["fill_rate"] = daily.apply(lambda r: safe_div(r["impressions"], r["ad_requests"], 100), axis=1)
+daily["ctr"] = daily.apply(lambda r: safe_div(r["clicks"], r["impressions"], 100), axis=1)  # clicks from GAM (confirmed)
 daily["rpm"] = daily.apply(lambda r: safe_div(r["revenue"], r["pageviews"], 1000), axis=1)
 daily["requests_per_pageview"] = daily.apply(lambda r: safe_div(r["ad_requests"], r["pageviews"], 1), axis=1)
 daily["impressions_per_session"] = daily.apply(lambda r: safe_div(r["impressions"], r["sessions"], 1), axis=1)
 
 # =============================
-# SIDEBAR SLICERS (PowerBI feel)
+# SIDEBAR SLICERS
 # =============================
 st.sidebar.header("Slicers")
 
@@ -121,7 +149,7 @@ selected_date = st.sidebar.date_input(
 )
 
 baseline_days = st.sidebar.slider("Baseline Window (days)", 7, 30, 7)
-compare_mode = st.sidebar.selectbox("Compare To", ["Yesterday", "7-day median", "Baseline median"], index=0)
+compare_mode = st.sidebar.selectbox("Compare To", ["Yesterday", "Baseline median"], index=0)
 
 today = pd.to_datetime(selected_date).normalize()
 yesterday = today - timedelta(days=1)
@@ -142,16 +170,13 @@ display_df = daily[(daily["date"] >= baseline_start - timedelta(days=1)) & (dail
 # compare reference
 if compare_mode == "Yesterday" and y:
     ref = y
-elif compare_mode == "7-day median":
-    ref_df = daily[(daily["date"] < today)].tail(7)
-    ref = ref_df.median(numeric_only=True).to_dict() if not ref_df.empty else {}
 else:
     ref = baseline_df.median(numeric_only=True).to_dict() if not baseline_df.empty else {}
 
 # =============================
 # KPI ENGINE (Median + MAD baseline)
 # =============================
-kpi_keys = [
+kpi_list = [
     ("revenue","Revenue",""),
     ("impressions","Impressions",""),
     ("ad_requests","Ad Requests",""),
@@ -159,10 +184,11 @@ kpi_keys = [
     ("ecpm","eCPM",""),
     ("rpm","RPM",""),
     ("requests_per_pageview","Req/Pageview",""),
+    ("ctr","CTR","%"),
 ]
 
 kpi = {}
-for key, label, suffix in kpi_keys:
+for key, label, suffix in kpi_list:
     s = baseline_df[key].dropna().astype(float)
     med = float(s.median()) if len(s) else 0.0
     mad = float(np.median(np.abs(s - med))) if len(s) else 0.0
@@ -172,12 +198,12 @@ for key, label, suffix in kpi_keys:
 
     z = robust_z(val_today, med, mad)
     conf = confidence_from_z(z)
-    delta = pct_change(val_today, val_ref) if val_ref is not None else 0.0
+    delta = pct_change(val_today, val_ref) if val_ref else 0.0
 
     kpi[key] = dict(label=label, suffix=suffix, today=val_today, ref=val_ref, med=med, mad=mad, z=z, conf=conf, delta=delta)
 
 # =============================
-# FORECAST / EXPECTED REVENUE (PowerBI "Target" style)
+# EXPECTED REVENUE (Forecast)
 # =============================
 expected_revenue = float(baseline_df["revenue"].median()) if not baseline_df.empty else 0.0
 actual_revenue = float(t["revenue"])
@@ -185,7 +211,7 @@ lost = expected_revenue - actual_revenue
 lost_pct = safe_div(lost, expected_revenue, 100) if expected_revenue else 0.0
 
 # =============================
-# KPI ROW (PowerBI cards)
+# KPI ROW
 # =============================
 c1, c2, c3, c4, c5 = st.columns(5)
 c1.markdown(kpi_card("Revenue", kpi["revenue"]["today"], kpi["revenue"]["delta"], kpi["revenue"]["z"], kpi["revenue"]["conf"]), unsafe_allow_html=True)
@@ -195,131 +221,187 @@ c4.markdown(kpi_card("Fill Rate", kpi["fill_rate"]["today"], kpi["fill_rate"]["d
 c5.markdown(kpi_card("eCPM", kpi["ecpm"]["today"], kpi["ecpm"]["delta"], kpi["ecpm"]["z"], kpi["ecpm"]["conf"]), unsafe_allow_html=True)
 
 # =============================
-# MAIN ROW: Decomposition + Expected Revenue
+# ROOT CAUSE (DECREMENT-BASED) + WATERFALLS
 # =============================
+st.subheader("🧠 Root Cause from Metric Decrements")
+
 left, right = st.columns([2, 1])
 
-with left:
-    st.subheader("📌 Revenue Change Breakdown (PowerBI Waterfall style)")
-
-    if y:
-        # Revenue decomposition approximation:
-        # revenue = impressions * ecpm / 1000
-        imp_y = float(y["impressions"])
-        ecpm_y = float(safe_div(y["revenue"], y["impressions"], 1000))
-        imp_t = float(t["impressions"])
-        ecpm_t = float(safe_div(t["revenue"], t["impressions"], 1000))
-
-        rev_y = float(y["revenue"])
-        rev_t = float(t["revenue"])
-
-        # Contribution
-        contrib_imp = (imp_t - imp_y) * (ecpm_y / 1000)
-        contrib_ecpm = imp_t * ((ecpm_t - ecpm_y) / 1000)
-        residual = (rev_t - rev_y) - (contrib_imp + contrib_ecpm)
-
-        wf = pd.DataFrame({
-            "Step": ["Yesterday Revenue", "Impressions Effect", "eCPM Effect", "Other/Residual", "Today Revenue"],
-            "Value": [rev_y, contrib_imp, contrib_ecpm, residual, rev_t],
-            "Type": ["base", "change", "change", "change", "total"]
-        })
-
-        # Build a waterfall-like bar using cumulative logic
-        wf["Cumulative"] = wf["Value"].cumsum()
-        wf["Start"] = wf["Cumulative"] - wf["Value"]
-
-        chart = alt.Chart(wf).mark_bar().encode(
-            x=alt.X("Step:N", sort=None),
-            y=alt.Y("Start:Q", title="Revenue"),
-            y2="Cumulative:Q",
-            tooltip=["Step", alt.Tooltip("Value:Q", format=",.2f")]
-        ).properties(height=280)
-
-        st.altair_chart(chart, use_container_width=True)
-    else:
-        st.info("Need yesterday data to show decomposition waterfall.")
-
 with right:
-    st.subheader("🎯 Expected Revenue (Target)")
-    st.metric("Expected (Baseline Median)", f"{expected_revenue:,.2f}")
+    st.subheader("🎯 Expected Revenue (Baseline Median)")
+    st.metric("Expected", f"{expected_revenue:,.2f}")
     st.metric("Actual (Today)", f"{actual_revenue:,.2f}", delta=f"{pct_change(actual_revenue, expected_revenue):+.2f}%" if expected_revenue else None)
     st.metric("Lost vs Expected", f"{max(lost,0):,.2f}", delta=f"{lost_pct:+.2f}%" if expected_revenue else None)
-    st.caption(f"Baseline window: last **{baseline_days}** days (median).")
+    st.caption(f"Expected = median of last {baseline_days} days.")
 
-# =============================
-# TOP ISSUES TABLE (PowerBI matrix feel)
-# =============================
-st.subheader("🧯 Top Issues (Anomaly + Drop ranked)")
+with left:
+    # Compare-based analysis (use yesterday if available, else baseline median)
+    if compare_mode == "Yesterday" and y:
+        base = y
+        base_label = "Yesterday"
+    else:
+        base = ref
+        base_label = "Baseline median"
 
-all_metrics = [
-    ("revenue","Revenue"),
-    ("sessions","Sessions"),
-    ("pageviews","Pageviews"),
-    ("ad_requests","Ad Requests"),
-    ("requests_per_pageview","Req/Pageview"),
-    ("fill_rate","Fill Rate"),
-    ("impressions","Impressions"),
-    ("ecpm","eCPM"),
-    ("rpm","RPM"),
-    ("ctr","CTR"),
-    ("impressions_per_session","Impressions/Session"),
-]
+    rev_base = float(base.get("revenue", 0.0))
+    rev_today = float(t.get("revenue", 0.0))
+    delta_rev = rev_today - rev_base
 
-rows = []
-for key, label in all_metrics:
-    s = baseline_df[key].dropna().astype(float)
-    med = float(s.median()) if len(s) else 0.0
-    mad = float(np.median(np.abs(s - med))) if len(s) else 0.0
-    val_today = float(t.get(key, 0.0))
-    val_ref = float(ref.get(key, 0.0)) if ref else 0.0
-    z = robust_z(val_today, med, mad)
-    conf = confidence_from_z(z)
-    delta = pct_change(val_today, val_ref) if val_ref else 0.0
+    imp_base = float(base.get("impressions", 0.0))
+    imp_today = float(t.get("impressions", 0.0))
 
-    # rank score
-    score = (abs(z) * 2 if z < 0 else 0) + (abs(delta) / 10 if delta < 0 else 0)
+    # Compute eCPM from the same base objects (not from baseline_df)
+    ecpm_base = safe_div(rev_base, imp_base, 1000)
+    ecpm_today = safe_div(rev_today, imp_today, 1000)
 
-    rows.append({
-        "Metric": label,
-        "Today": val_today,
-        "Compare": val_ref,
-        "Δ %": delta,
-        "Baseline Median": med,
-        "Robust Z": z,
-        "Confidence %": conf,
-        "Score": score
+    # Revenue decomposition:
+    # ΔRevenue ≈ (ΔImpressions * base eCPM/1000) + (today impressions * ΔeCPM/1000) + residual
+    imp_effect = (imp_today - imp_base) * (ecpm_base / 1000)
+    ecpm_effect = imp_today * ((ecpm_today - ecpm_base) / 1000)
+    residual = delta_rev - (imp_effect + ecpm_effect)
+
+    wf_rev = pd.DataFrame({
+        "Step": [f"{base_label} Revenue", "Impressions effect", "eCPM effect", "Residual", "Today Revenue"],
+        "Value": [rev_base, imp_effect, ecpm_effect, residual, rev_today]
     })
+    st.altair_chart(waterfall_like(wf_rev, "Revenue Change Decomposition"), use_container_width=True)
 
-issues = pd.DataFrame(rows).sort_values("Score", ascending=False).head(8).drop(columns=["Score"])
-st.dataframe(issues, use_container_width=True)
+    # Now decompose impressions if impressions effect is the driver
+    # Impressions ≈ Requests * FillRate/100
+    req_base = float(base.get("ad_requests", 0.0))
+    req_today = float(t.get("ad_requests", 0.0))
+    fill_base = safe_div(imp_base, req_base, 100) if req_base else 0.0
+    fill_today = safe_div(imp_today, req_today, 100) if req_today else 0.0
+    delta_imp = imp_today - imp_base
+
+    # ΔImpressions ≈ (ΔRequests * base fill/100) + (today requests * ΔFill/100) + residual
+    req_effect = (req_today - req_base) * (fill_base / 100)
+    fill_effect = req_today * ((fill_today - fill_base) / 100)
+    imp_residual = delta_imp - (req_effect + fill_effect)
+
+    wf_imp = pd.DataFrame({
+        "Step": [f"{base_label} Impressions", "Requests effect", "Fill effect", "Residual", "Today Impressions"],
+        "Value": [imp_base, req_effect, fill_effect, imp_residual, imp_today]
+    })
+    st.altair_chart(waterfall_like(wf_imp, "Impressions Change Decomposition"), use_container_width=True)
+
+    # Auto Root Cause Statement (based on contributions)
+    st.markdown("### ✅ Root Cause Summary")
+
+    # Contribution magnitudes
+    contribs = [
+        ("Impressions effect", imp_effect),
+        ("eCPM effect", ecpm_effect),
+        ("Residual", residual)
+    ]
+    contribs_sorted = sorted(contribs, key=lambda x: abs(x[1]), reverse=True)
+    top_name, top_val = contribs_sorted[0]
+
+    direction = "down" if delta_rev < 0 else "up"
+    st.write(f"• Revenue moved **{direction} {abs(delta_rev):,.2f}** vs {base_label}.")
+
+    if top_name == "Impressions effect":
+        st.write(f"• Primary driver: **Impressions** (impact {imp_effect:,.2f}).")
+        # Drill inside impressions
+        inner = [("Requests effect", req_effect), ("Fill effect", fill_effect)]
+        inner_sorted = sorted(inner, key=lambda x: abs(x[1]), reverse=True)
+        inner_name, inner_val = inner_sorted[0]
+        if inner_name == "Requests effect":
+            st.write(f"• Impressions fell mainly because **Ad Requests** fell (impact {req_effect:,.2f}).")
+            # Determine if request drop is traffic or loading
+            # requests/pageview change
+            rpp_base = safe_div(req_base, float(base.get("pageviews", 0.0)), 1)
+            rpp_today = safe_div(req_today, float(t.get("pageviews", 0.0)), 1)
+            if rpp_today < rpp_base * 0.9:
+                st.write("• Request drop looks like **Ad Loading issue** (requests per pageview decreased).")
+            else:
+                st.write("• Request drop looks like **Traffic/engagement issue** (requests per pageview stable).")
+        else:
+            st.write(f"• Impressions fell mainly because **Fill Rate** fell (impact {fill_effect:,.2f}).")
+            st.write("• This points to **Demand/Floors/Blocks/Policy** type issue.")
+    elif top_name == "eCPM effect":
+        st.write(f"• Primary driver: **eCPM** (impact {ecpm_effect:,.2f}).")
+        st.write("• This points to **Value/Auction** changes (geo mix, viewability, bidder competition, floors).")
+    else:
+        st.write("• Residual is the largest piece (usually means both drivers moved or rounding + metric mismatch).")
+
+    # CTR is diagnostic only
+    ctr_base = float(base.get("ctr", safe_div(float(base.get("clicks", 0.0)), float(base.get("impressions", 0.0)), 100)))
+    ctr_today = float(t.get("ctr", safe_div(float(t.get("clicks", 0.0)), float(t.get("impressions", 0.0)), 100)))
+    if ctr_today > ctr_base * 1.3:
+        st.write("• CTR jumped sharply: treat this as a **diagnostic** (possible layout change or accidental clicks), not a revenue driver.")
+    elif ctr_today < ctr_base * 0.7:
+        st.write("• CTR dropped sharply: usually indicates lower engagement or different ad mix; still **not** the direct revenue driver.")
 
 # =============================
-# TABS (PowerBI pages)
+# CTR SECTION (UPDATED EXPLANATION + USE)
 # =============================
-tab1, tab2, tab3, tab4 = st.tabs(["Overview Trends", "Traffic", "Delivery", "Value"])
+st.subheader("🧾 CTR (How to use it correctly)")
 
-def line_chart(cols, title):
-    d = display_df[["date"] + cols].copy()
-    melted = d.melt(id_vars="date", value_vars=cols, var_name="metric", value_name="value")
-    return alt.Chart(melted).mark_line(point=True).encode(
-        x=alt.X("date:T"),
-        y=alt.Y("value:Q"),
-        color="metric:N",
-        tooltip=["date:T","metric:N","value:Q"]
-    ).properties(title=title, height=280)
+st.write("""
+CTR is **Clicks / Impressions** (from GAM).
+CTR is not a direct part of revenue for most CPM inventory.
+So CTR is best used as a **health + risk signal**, not as “why revenue dropped”.
+""")
+
+st.write("Use CTR for:")
+st.write("• Detecting **accidental click risk** (CTR spikes after layout changes)")
+st.write("• Detecting **ad format changes** (CTR changes with sticky/interstitial/etc.)")
+st.write("• Detecting **policy risk** (sudden CTR spikes can trigger scrutiny)")
+
+# =============================
+# TRENDS + TABS
+# =============================
+st.subheader("📈 Trends (Baseline → Today)")
+st.altair_chart(line_chart(display_df, ["revenue","impressions","ecpm"], "Revenue vs Impressions vs eCPM"), use_container_width=True)
+st.altair_chart(line_chart(display_df, ["ad_requests","fill_rate","requests_per_pageview"], "Requests vs Fill vs Requests/Pageview"), use_container_width=True)
+st.altair_chart(line_chart(display_df, ["ctr","rpm"], "CTR (diagnostic) + RPM"), use_container_width=True)
+
+tab1, tab2, tab3 = st.tabs(["Issues", "Delivery Detail", "Value Detail"])
 
 with tab1:
-    st.altair_chart(line_chart(["revenue","ecpm"], "Revenue vs eCPM"), use_container_width=True)
-    st.altair_chart(line_chart(["rpm","fill_rate"], "RPM vs Fill Rate"), use_container_width=True)
+    st.subheader("🧯 Top Issues (ranked)")
+    metrics = [
+        ("revenue","Revenue"),
+        ("sessions","Sessions"),
+        ("pageviews","Pageviews"),
+        ("ad_requests","Ad Requests"),
+        ("requests_per_pageview","Req/Pageview"),
+        ("fill_rate","Fill Rate"),
+        ("impressions","Impressions"),
+        ("ecpm","eCPM"),
+        ("rpm","RPM"),
+        ("ctr","CTR"),
+    ]
+    rows = []
+    for key, label in metrics:
+        s = baseline_df[key].dropna().astype(float)
+        med = float(s.median()) if len(s) else 0.0
+        mad = float(np.median(np.abs(s - med))) if len(s) else 0.0
+        val_today = float(t.get(key, 0.0))
+        val_ref = float(ref.get(key, 0.0)) if ref else 0.0
+        z = robust_z(val_today, med, mad)
+        conf = confidence_from_z(z)
+        delta = pct_change(val_today, val_ref) if val_ref else 0.0
+        score = (abs(z) * 2 if z < 0 else 0) + (abs(delta) / 10 if delta < 0 else 0)
+        rows.append([label, val_today, val_ref, delta, med, z, conf, score])
+
+    issues = pd.DataFrame(rows, columns=["Metric","Today","Compare","Δ %","Baseline Median","Robust Z","Confidence %","Score"])
+    issues = issues.sort_values("Score", ascending=False).drop(columns=["Score"]).head(10)
+    st.dataframe(issues, use_container_width=True)
 
 with tab2:
-    st.altair_chart(line_chart(["sessions","pageviews"], "Sessions vs Pageviews"), use_container_width=True)
+    st.subheader("🚚 Delivery Detail")
+    st.write("Focus when impressions drop is the main driver:")
+    st.write("• Requests and Requests/Pageview (ad loading)")
+    st.write("• Fill rate (demand/floors/blocks)")
+    st.altair_chart(line_chart(display_df, ["ad_requests","requests_per_pageview","fill_rate","impressions"], "Delivery pipeline"), use_container_width=True)
 
 with tab3:
-    st.altair_chart(line_chart(["ad_requests","requests_per_pageview"], "Requests & Requests/Pageview (Ad Loading)"), use_container_width=True)
-    st.altair_chart(line_chart(["fill_rate","impressions"], "Fill Rate → Impressions (Demand/Delivery)"), use_container_width=True)
+    st.subheader("💰 Value Detail")
+    st.write("Focus when eCPM drop is the main driver:")
+    st.write("• eCPM trend + RPM trend")
+    st.write("• If you later add geo/device columns, we can show top segments causing the drop")
+    st.altair_chart(line_chart(display_df, ["ecpm","rpm","revenue"], "Value pipeline"), use_container_width=True)
 
-with tab4:
-    st.altair_chart(line_chart(["ecpm","ctr"], "eCPM vs CTR (Value Signals)"), use_container_width=True)
-
-st.caption("PowerBI-style layout: slicers → KPI cards → decomposition → issues matrix → drill tabs.")
+st.caption("Root cause is computed from metric decrements: Revenue → (Impressions + eCPM) and Impressions → (Requests + Fill). CTR is diagnostic, not a revenue driver.")
