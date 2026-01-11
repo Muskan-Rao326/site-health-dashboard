@@ -25,7 +25,6 @@ def z_score(val, mean, std):
     return (val - mean) / std
 
 def confidence_from_z(z):
-    # two-sided confidence
     p = 2 * (1 - norm.cdf(abs(z)))
     return (1 - p) * 100
 
@@ -33,13 +32,12 @@ def safe_div(n, d, multiplier=1.0):
     return (n / d) * multiplier if d and d != 0 else 0.0
 
 def render_kpi(col, title, val, delta_pct, z, conf):
-    # z-based colors (negative anomalies)
     if z >= -1:
-        color = "#2ECC71"  # green
+        color = "#2ECC71"
     elif z >= -2:
-        color = "#F1C40F"  # yellow
+        color = "#F1C40F"
     else:
-        color = "#E74C3C"  # red
+        color = "#E74C3C"
 
     col.markdown(
         f"""
@@ -49,6 +47,28 @@ def render_kpi(col, title, val, delta_pct, z, conf):
             <div style="margin-top:6px;font-size:13px">Δ vs Yesterday: {delta_pct:+.2f}%</div>
             <div style="font-size:13px">Z-score: {z:.2f}</div>
             <div style="font-size:13px">Confidence: {conf:.1f}%</div>
+        </div>
+        """,
+        unsafe_allow_html=True
+    )
+
+def status_chip(label, state, note=""):
+    # state: green/yellow/red
+    if state == "green":
+        bg = "#2ECC71"
+        icon = "🟢"
+    elif state == "yellow":
+        bg = "#F1C40F"
+        icon = "🟠"
+    else:
+        bg = "#E74C3C"
+        icon = "🔴"
+
+    st.markdown(
+        f"""
+        <div style="background:{bg};padding:10px 12px;border-radius:12px;color:white;margin-bottom:8px">
+          <div style="font-size:13px;opacity:0.95">{icon} {label}</div>
+          <div style="font-size:12px;opacity:0.95">{note}</div>
         </div>
         """,
         unsafe_allow_html=True
@@ -80,7 +100,7 @@ if "site_name" in df_raw.columns:
     if len(sites) == 0:
         st.error("No site_name values found in CSV.")
         st.stop()
-    site = sites[0]  # one site only (first)
+    site = sites[0]  # single-site mode
     df_raw = df_raw[df_raw["site_name"] == site].copy()
     st.caption(f"Using site: **{site}** (single-site mode)")
 else:
@@ -93,7 +113,7 @@ required_additive = [
     "revenue",
     "ad_requests",
     "impressions",
-    "clicks",
+    "clicks",     # clicks from GAM (confirmed)
     "sessions",
     "users",
     "pageviews",
@@ -109,12 +129,12 @@ for c in required_additive:
     df_raw[c] = pd.to_numeric(df_raw[c], errors="coerce").fillna(0.0)
 
 # =============================
-# DAILY AGGREGATION (THE KEY FIX)
+# DAILY AGGREGATION
 # =============================
 daily = df_raw.groupby("date", as_index=False)[required_additive].sum()
 
 # =============================
-# DERIVED METRICS (RECOMPUTE, DON'T TRUST CSV)
+# DERIVED METRICS (RECOMPUTE CLEANLY)
 # =============================
 daily["ecpm"] = daily.apply(lambda r: safe_div(r["revenue"], r["impressions"], 1000), axis=1)
 daily["ctr"] = daily.apply(lambda r: safe_div(r["clicks"], r["impressions"], 100), axis=1)  # %
@@ -123,8 +143,7 @@ daily["rpm"] = daily.apply(lambda r: safe_div(r["revenue"], r["pageviews"], 1000
 daily["requests_per_pageview"] = daily.apply(lambda r: safe_div(r["ad_requests"], r["pageviews"], 1), axis=1)
 daily["impressions_per_session"] = daily.apply(lambda r: safe_div(r["impressions"], r["sessions"], 1), axis=1)
 
-# If your CSV has these as base additive columns, we can compute these too.
-# Otherwise we keep them out of KPI.
+# Optional columns (if present as additive bases)
 if "engaged_sessions" in df_raw.columns:
     df_raw["engaged_sessions"] = pd.to_numeric(df_raw["engaged_sessions"], errors="coerce").fillna(0.0)
     engaged = df_raw.groupby("date", as_index=False)["engaged_sessions"].sum()
@@ -177,9 +196,8 @@ t = today_row.iloc[0].to_dict()
 y = yesterday_row.iloc[0].to_dict() if not yesterday_row.empty else None
 
 # =============================
-# KPI CONFIG
+# KPI LIST
 # =============================
-# Additive + derived metrics that are safe to show
 kpi_metrics = [
     ("revenue", "Revenue"),
     ("sessions", "Sessions"),
@@ -191,9 +209,8 @@ kpi_metrics = [
     ("rpm", "RPM"),
     ("requests_per_pageview", "Requests/Pageview"),
     ("ctr", "CTR (%)"),
+    ("impressions_per_session", "Impressions/Session"),
 ]
-
-# Optional ratios (only if present)
 if not np.isnan(t.get("viewability", np.nan)):
     kpi_metrics.append(("viewability", "Viewability (%)"))
 if not np.isnan(t.get("engagement_rate", np.nan)):
@@ -212,7 +229,6 @@ for key, label in kpi_metrics:
 
     z = z_score(val_today, mean, std)
     conf = confidence_from_z(z)
-
     delta = pct_change(val_today, val_y) if y else 0.0
 
     kpi[key] = {
@@ -227,99 +243,91 @@ for key, label in kpi_metrics:
     }
 
 # =============================
-# KPI DISPLAY (TOP ROW)
+# TOP KPIs DISPLAY
 # =============================
-st.subheader("📌 Key Metrics (Daily Totals + Correct Derived Rates)")
+st.subheader("📌 Key Metrics")
 
-top_keys = ["revenue", "ecpm", "sessions", "ad_requests"]
 cols = st.columns(4)
-for i, k in enumerate(top_keys):
-    render_kpi(
-        cols[i],
-        kpi[k]["label"],
-        kpi[k]["today"],
-        kpi[k]["delta_pct"],
-        kpi[k]["z"],
-        kpi[k]["confidence"],
-    )
+for i, k in enumerate(["revenue", "ecpm", "sessions", "ad_requests"]):
+    render_kpi(cols[i], kpi[k]["label"], kpi[k]["today"], kpi[k]["delta_pct"], kpi[k]["z"], kpi[k]["confidence"])
 
-# Second row KPIs
-st.write("")
 cols2 = st.columns(4)
-second_keys = ["fill_rate", "impressions", "rpm", "requests_per_pageview"]
-for i, k in enumerate(second_keys):
-    render_kpi(
-        cols2[i],
-        kpi[k]["label"],
-        kpi[k]["today"],
-        kpi[k]["delta_pct"],
-        kpi[k]["z"],
-        kpi[k]["confidence"],
-    )
+for i, k in enumerate(["fill_rate", "impressions", "rpm", "requests_per_pageview"]):
+    render_kpi(cols2[i], kpi[k]["label"], kpi[k]["today"], kpi[k]["delta_pct"], kpi[k]["z"], kpi[k]["confidence"])
 
 # =============================
-# LEAKAGE PIPELINE INSIGHT ENGINE
+# LEAKAGE PIPELINE: REASONS + ROOT CAUSE CLASS
 # =============================
 st.subheader("🧠 Key Reasons (Leakage Pipeline)")
 
-def leakage_reasons(t, y):
+def leakage_analysis(t, y):
     if not y:
-        return ["No previous-day data available to explain movement."], "info"
+        return ["No previous-day data available."], "info", "unknown"
 
-    d_rev = pct_change(t["revenue"], y["revenue"])
-    d_imp = pct_change(t["impressions"], y["impressions"])
-    d_ecpm = pct_change(t["ecpm"], y["ecpm"])
-    d_req = pct_change(t["ad_requests"], y["ad_requests"])
-    d_fill = pct_change(t["fill_rate"], y["fill_rate"])
-    d_sess = pct_change(t["sessions"], y["sessions"])
-    d_pv = pct_change(t["pageviews"], y["pageviews"])
-    d_rpp = pct_change(t["requests_per_pageview"], y["requests_per_pageview"])
+    d = {
+        "revenue": pct_change(t["revenue"], y["revenue"]),
+        "impressions": pct_change(t["impressions"], y["impressions"]),
+        "ecpm": pct_change(t["ecpm"], y["ecpm"]),
+        "ad_requests": pct_change(t["ad_requests"], y["ad_requests"]),
+        "fill_rate": pct_change(t["fill_rate"], y["fill_rate"]),
+        "sessions": pct_change(t["sessions"], y["sessions"]),
+        "pageviews": pct_change(t["pageviews"], y["pageviews"]),
+        "requests_per_pageview": pct_change(t["requests_per_pageview"], y["requests_per_pageview"]),
+        "viewability": pct_change(t.get("viewability", 0.0), y.get("viewability", 0.0)) if "viewability" in t and "viewability" in y else 0.0,
+    }
 
     def big_drop(x, th):
         return x <= -th
 
     reasons = []
-    severity = "success"
+    root = "unknown"
 
-    # trigger threshold
-    if not big_drop(d_rev, 10):
-        reasons.append("Revenue is within normal day-to-day movement.")
-        return reasons, "success"
+    # Only fire if meaningful revenue drop
+    if not big_drop(d["revenue"], 10):
+        return ["Revenue is within normal day-to-day movement."], "success", "normal"
 
-    severity = "error"
-    reasons.append(f"Revenue is down **{d_rev:.1f}%** vs yesterday.")
+    reasons.append(f"Revenue is down **{d['revenue']:.1f}%** vs yesterday.")
 
     # Revenue = Impressions * eCPM
-    if big_drop(d_imp, 10) and not big_drop(d_ecpm, 15):
-        reasons.append(f"Primary driver: **Impressions fell {d_imp:.1f}%** while eCPM stayed relatively stable ({d_ecpm:.1f}%).")
+    if big_drop(d["impressions"], 10) and not big_drop(d["ecpm"], 15):
+        reasons.append(f"Primary driver: **Impressions fell {d['impressions']:.1f}%** while eCPM stayed relatively stable ({d['ecpm']:.1f}%).")
 
         # Impressions = Requests * Fill
-        if big_drop(d_req, 10) and not big_drop(d_fill, 10):
-            reasons.append(f"Impressions fell because **Ad Requests fell {d_req:.1f}%** while Fill Rate stayed stable ({d_fill:.1f}%).")
+        if big_drop(d["ad_requests"], 10) and not big_drop(d["fill_rate"], 10):
+            root = "ad_loading_or_traffic"
+            reasons.append(f"Impressions fell because **Ad Requests fell {d['ad_requests']:.1f}%** while Fill Rate stayed stable ({d['fill_rate']:.1f}%).")
 
-            # Requests: traffic vs technical
-            if big_drop(d_sess, 10) or big_drop(d_pv, 10):
-                reasons.append(f"Ad Requests fell due to **traffic/engagement decline** (Sessions {d_sess:.1f}%, Pageviews {d_pv:.1f}%).")
-            elif big_drop(d_rpp, 10):
+            if big_drop(d["sessions"], 10) or big_drop(d["pageviews"], 10):
+                root = "traffic"
+                reasons.append(f"Ad Requests fell due to **traffic/engagement decline** (Sessions {d['sessions']:.1f}%, Pageviews {d['pageviews']:.1f}%).")
+            elif big_drop(d["requests_per_pageview"], 10):
+                root = "ad_loading"
                 reasons.append("Traffic is stable but **Requests/Pageview dropped** → likely tag/CMP/lazyload/JS issue (ads not loading).")
             else:
-                reasons.append("Requests fell while traffic looks stable → check recent tag/placement changes, ad unit rendering, CMP, latency.")
-        elif big_drop(d_fill, 10) and not big_drop(d_req, 10):
-            reasons.append(f"Impressions fell because **Fill Rate fell {d_fill:.1f}%** while Requests were stable ({d_req:.1f}%).")
+                root = "ad_loading"
+                reasons.append("Requests fell while traffic looks stable → check tag/placement changes, CMP, latency, ad unit rendering.")
+        elif big_drop(d["fill_rate"], 10) and not big_drop(d["ad_requests"], 10):
+            root = "demand"
+            reasons.append(f"Impressions fell because **Fill Rate fell {d['fill_rate']:.1f}%** while Requests were stable ({d['ad_requests']:.1f}%).")
             reasons.append("Likely causes: floors too high, blocking rules, policy limitation, demand partner outage, size mismatch.")
         else:
+            root = "mixed_delivery"
             reasons.append("Impressions fell due to a mix of lower requests and lower fill. Investigate both technical loading and demand controls.")
 
-    elif big_drop(d_ecpm, 15) and not big_drop(d_imp, 10):
-        reasons.append(f"Primary driver: **eCPM fell {d_ecpm:.1f}%** while impressions were relatively stable ({d_imp:.1f}%).")
-        reasons.append("This points to an **auction/value** issue (geo/device mix shift, viewability drop, fewer bidders, floors/blocks).")
+    elif big_drop(d["ecpm"], 15) and not big_drop(d["impressions"], 10):
+        root = "value"
+        reasons.append(f"Primary driver: **eCPM fell {d['ecpm']:.1f}%** while impressions were relatively stable ({d['impressions']:.1f}%).")
+        if not np.isnan(t.get("viewability", np.nan)) and big_drop(d["viewability"], 10):
+            reasons.append(f"Viewability also fell {d['viewability']:.1f}% → placement/layout/latency likely reduced bids.")
+        reasons.append("This points to an **auction/value** issue: geo/device mix shift, viewability, fewer bidders, floors/blocks.")
     else:
-        reasons.append(f"Mixed driver: Impressions ({d_imp:.1f}%) and eCPM ({d_ecpm:.1f}%) both declined.")
+        root = "mixed"
+        reasons.append(f"Mixed driver: Impressions ({d['impressions']:.1f}%) and eCPM ({d['ecpm']:.1f}%) both declined.")
         reasons.append("Investigate: traffic mix + ad loading + demand/floors + viewability/bidder competition.")
 
-    return reasons, severity
+    return reasons, "error", root
 
-reasons, severity = leakage_reasons(t, y)
+reasons, severity, root_cause = leakage_analysis(t, y)
 
 if severity == "success":
     st.success("🟢 " + reasons[0])
@@ -327,6 +335,112 @@ else:
     st.error("🔴 " + reasons[0])
     for r in reasons[1:]:
         st.write("• " + r)
+
+# =============================
+# STATUS PANEL (ONE GO)
+# =============================
+st.subheader("🚦 Status Panel (Where to Look Today)")
+
+def classify_state(z):
+    if z >= -1:
+        return "green"
+    if z >= -2:
+        return "yellow"
+    return "red"
+
+c1, c2, c3, c4 = st.columns(4)
+
+with c1:
+    status_chip("Traffic", classify_state(kpi["sessions"]["z"]),
+                f"Sessions Δ {kpi['sessions']['delta_pct']:+.1f}%, Z {kpi['sessions']['z']:.2f}")
+
+with c2:
+    status_chip("Ad Loading", classify_state(kpi["requests_per_pageview"]["z"]),
+                f"Req/Pageview Δ {kpi['requests_per_pageview']['delta_pct']:+.1f}%, Z {kpi['requests_per_pageview']['z']:.2f}")
+
+with c3:
+    status_chip("Demand", classify_state(kpi["fill_rate"]["z"]),
+                f"Fill Rate Δ {kpi['fill_rate']['delta_pct']:+.1f}%, Z {kpi['fill_rate']['z']:.2f}")
+
+with c4:
+    status_chip("Value", classify_state(kpi["ecpm"]["z"]),
+                f"eCPM Δ {kpi['ecpm']['delta_pct']:+.1f}%, Z {kpi['ecpm']['z']:.2f}")
+
+# =============================
+# TOP 3 SUSPECT METRICS (AUTO-RANKED)
+# =============================
+st.subheader("🧯 Top 3 Suspect Metrics (Auto)")
+
+suspects = []
+for key, meta in kpi.items():
+    if key == "revenue":
+        continue
+    # Score: prioritize big negative z + big negative delta
+    z = meta["z"]
+    dlt = meta["delta_pct"]
+    score = 0
+    if z < 0:
+        score += abs(z) * 2
+    if dlt < 0:
+        score += abs(dlt) / 10  # scale delta weight
+    suspects.append((score, key, meta["label"], meta["today"], meta["delta_pct"], meta["z"], meta["confidence"]))
+
+suspects = sorted(suspects, key=lambda x: x[0], reverse=True)[:3]
+
+scols = st.columns(3)
+for i, s in enumerate(suspects):
+    _, key, label, val, dlt, z, conf = s
+    render_kpi(scols[i], f"Suspect: {label}", val, dlt, z, conf)
+
+# =============================
+# ACTION RECOMMENDATIONS (DYNAMIC)
+# =============================
+st.subheader("🛠 What to Check + What to Fix (Next Steps)")
+
+def action_recommendations(root):
+    if root == "traffic":
+        return [
+            "Check **GA4 Traffic Acquisition**: which source/medium dropped (SEO, Direct, Paid).",
+            "Check **Landing pages**: did top 5 pages lose sessions?",
+            "Verify site availability / speed issues (page load, errors).",
+            "If SEO-driven: check if a specific country/device lost traffic first."
+        ]
+    if root == "ad_loading":
+        return [
+            "Compare **Requests/Pageview** today vs baseline (this catches tag/CMP/lazyload issues).",
+            "Check if a recent deploy changed ad tags, slot IDs, or lazy load trigger.",
+            "Validate CMP/consent signals: are requests blocked until consent?",
+            "Check GAM ad unit rendering: any key ad unit showing near-zero requests?"
+        ]
+    if root == "demand":
+        return [
+            "Check **Unfilled impressions** and fill by **country/device/ad unit** in GAM.",
+            "Audit **floor prices** (especially recent changes) and price rules.",
+            "Review blocking: category blocks, advertiser domain blocks, brand safety changes.",
+            "If only one geo dropped: demand partner / policy restriction for that region."
+        ]
+    if root == "value":
+        return [
+            "Break down eCPM by **country + device**: is the drop only on a segment?",
+            "Check **viewability** (if available). Layout changes can reduce bids quickly.",
+            "Check auction competition: did a bidder stop winning / disappear?",
+            "Review floors/blocks: sometimes value drops because you changed auction dynamics."
+        ]
+    if root in ["mixed", "mixed_delivery"]:
+        return [
+            "Both delivery and value moved: split analysis into 2 threads:",
+            "1) Delivery: Requests/Pageview + Fill Rate",
+            "2) Value: eCPM by geo/device + viewability",
+            "Look for the first metric that broke sharply vs baseline."
+        ]
+    return [
+        "No strong root cause classification yet. Start with:",
+        "Requests/Pageview → Fill Rate → eCPM, then drill into geo/device."
+    ]
+
+steps = action_recommendations(root_cause)
+for s in steps:
+    st.write("• " + s)
 
 # =============================
 # TRENDS
@@ -346,10 +460,10 @@ def line_chart(cols, title):
 st.altair_chart(line_chart(["revenue", "ecpm"], "Revenue vs eCPM"), use_container_width=True)
 st.altair_chart(line_chart(["sessions", "pageviews", "ad_requests"], "Traffic → Pageviews → Ad Requests"), use_container_width=True)
 st.altair_chart(line_chart(["fill_rate", "impressions"], "Fill Rate → Impressions"), use_container_width=True)
-st.altair_chart(line_chart(["rpm", "requests_per_pageview"], "RPM + Requests/Pageview (Leakage Signals)"), use_container_width=True)
+st.altair_chart(line_chart(["rpm", "requests_per_pageview", "impressions_per_session"], "Leakage Signals"), use_container_width=True)
 
 # =============================
-# KPI TABLE (FULL)
+# KPI TABLE
 # =============================
 st.subheader("📋 KPI Table (Today vs Yesterday vs Baseline)")
 rows = []
@@ -364,8 +478,7 @@ for key, label in kpi_metrics:
         "Z": kpi[key]["z"],
         "Confidence %": kpi[key]["confidence"],
     })
-kpi_table = pd.DataFrame(rows)
-st.dataframe(kpi_table, use_container_width=True)
+st.dataframe(pd.DataFrame(rows), use_container_width=True)
 
 # =============================
 # Z-SCORE GUIDE
@@ -379,4 +492,4 @@ st.markdown("""
 | < -2 | Anomaly | Investigate immediately |
 """)
 
-st.caption("This dashboard recomputes derived metrics (eCPM/CTR/Fill/RPM) from base totals for correct daily reporting.")
+st.caption("Derived metrics (eCPM/CTR/Fill/RPM) are recomputed from base totals for correct daily reporting.")
