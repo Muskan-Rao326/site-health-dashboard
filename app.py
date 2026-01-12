@@ -1,12 +1,9 @@
-# app.py
-# Revenue Intelligence Dashboard (PowerBI-style) — Single Site
-# ✅ Correct math: only SUM base totals; all ratios derived from totals
-# ✅ Root cause from decrement math:
-#    Revenue → (Impressions effect + eCPM effect)
-#    Impressions → (Requests effect + Fill effect)
-# ✅ “Today vs Expected Loss Meter” + loss allocation (Expected → Today)
-# ✅ No CTR explanation text (CTR only KPI + small diagnostic flag if extreme)
-# ✅ Baseline window variable (7–30) using median + MAD (robust)
+# app.py — Revenue Intelligence Dashboard (Story-fixed)
+# Fixes:
+# ✅ One story reference: Expected baseline median used everywhere
+# ✅ Adds story confidence using residual ratio (prevents false certainty)
+# ✅ Revenue gap split uses only LOSS contributions (no misleading abs shares)
+# ✅ Compare-to-yesterday kept only as context (not mixing narratives)
 
 import streamlit as st
 import pandas as pd
@@ -35,7 +32,7 @@ st.markdown(
 )
 
 st.markdown('<div class="title">📊 Revenue Intelligence Dashboard</div>', unsafe_allow_html=True)
-st.markdown('<div class="sub">Root-cause via decrement math (GA4 + GAM) • single-site</div>', unsafe_allow_html=True)
+st.markdown('<div class="sub">Story-first root cause (GA4 + GAM) • single-site • consistent baseline</div>', unsafe_allow_html=True)
 
 # =============================
 # HELPERS
@@ -79,7 +76,7 @@ def kpi_card(title, value, delta_pct, z, conf, suffix=""):
     <div class="card" style="background:{bg}">
         <div class="kpi-label">{title}</div>
         <div class="kpi-val">{value:,.2f}{suffix}</div>
-        <div class="kpi-meta">Δ vs Compare: {delta_pct:+.2f}%</div>
+        <div class="kpi-meta">Δ vs Yesterday: {delta_pct:+.2f}%</div>
         <div class="kpi-meta">Robust Z: {z:.2f} • Confidence: {conf:.1f}%</div>
     </div>
     """
@@ -179,10 +176,9 @@ if missing:
 for c in base_cols:
     df_raw[c] = pd.to_numeric(df_raw[c], errors="coerce").fillna(0.0)
 
-# Daily totals
 daily = df_raw.groupby("date", as_index=False)[base_cols].sum().sort_values("date")
 
-# Derived ratios (correct)
+# Derived ratios from totals (correct)
 daily["ecpm"] = daily.apply(lambda r: safe_div(r["revenue"], r["impressions"], 1000), axis=1)
 daily["fill_rate"] = daily.apply(lambda r: safe_div(r["impressions"], r["ad_requests"], 100), axis=1)
 daily["ctr"] = daily.apply(lambda r: safe_div(r["clicks"], r["impressions"], 100), axis=1)
@@ -202,8 +198,8 @@ selected_date = st.sidebar.date_input(
     min_value=daily["date"].min().date(),
     max_value=daily["date"].max().date(),
 )
+
 baseline_days = st.sidebar.slider("Baseline Window (days)", 7, 30, 7)
-compare_mode = st.sidebar.selectbox("Compare To", ["Yesterday", "Baseline median"], index=0)
 
 today = pd.to_datetime(selected_date).normalize()
 yesterday = today - timedelta(days=1)
@@ -221,36 +217,29 @@ y = y_row.iloc[0].to_dict() if not y_row.empty else None
 baseline_df = daily[(daily["date"] < today) & (daily["date"] >= baseline_start)]
 display_df = daily[(daily["date"] >= baseline_start - timedelta(days=1)) & (daily["date"] <= today)]
 
-# Compare base row
-if compare_mode == "Yesterday" and y is not None:
-    base = y
-    base_label = "Yesterday"
-else:
-    base_add = baseline_df[base_cols].median(numeric_only=True).to_dict() if not baseline_df.empty else {c: 0.0 for c in base_cols}
-    base = dict(base_add)
-    # derive base ratios from base totals (consistent)
-    base["ecpm"] = safe_div(base["revenue"], base["impressions"], 1000)
-    base["fill_rate"] = safe_div(base["impressions"], base["ad_requests"], 100)
-    base["ctr"] = safe_div(base["clicks"], base["impressions"], 100)
-    base["rpm"] = safe_div(base["revenue"], base["pageviews"], 1000)
-    base["requests_per_pageview"] = safe_div(base["ad_requests"], base["pageviews"], 1)
-    base["impressions_per_session"] = safe_div(base["impressions"], base["sessions"], 1)
-    base["pageviews_per_session"] = safe_div(base["pageviews"], base["sessions"], 1)
-    base_label = "Baseline median"
+# =============================
+# STORY BASE: EXPECTED (BASELINE MEDIAN TOTALS)
+# =============================
+# Expected totals
+expected_totals = baseline_df[base_cols].median(numeric_only=True).to_dict() if not baseline_df.empty else {c: 0.0 for c in base_cols}
 
-# =============================
-# EXPECTED (BASELINE) FOR LOSS METER
-# =============================
-expected_revenue = float(baseline_df["revenue"].median()) if not baseline_df.empty else 0.0
+exp = dict(expected_totals)
+# Derive expected ratios from expected totals (consistent)
+exp["ecpm"] = safe_div(exp["revenue"], exp["impressions"], 1000)
+exp["fill_rate"] = safe_div(exp["impressions"], exp["ad_requests"], 100)
+exp["ctr"] = safe_div(exp["clicks"], exp["impressions"], 100)
+exp["rpm"] = safe_div(exp["revenue"], exp["pageviews"], 1000)
+exp["requests_per_pageview"] = safe_div(exp["ad_requests"], exp["pageviews"], 1)
+exp["impressions_per_session"] = safe_div(exp["impressions"], exp["sessions"], 1)
+exp["pageviews_per_session"] = safe_div(exp["pageviews"], exp["sessions"], 1)
+
+expected_revenue = float(exp["revenue"])
 actual_revenue = float(t["revenue"])
 gap = expected_revenue - actual_revenue  # + means loss
 
-# Also compute expected impressions and expected eCPM (for loss allocation)
-expected_impressions = float(baseline_df["impressions"].median()) if not baseline_df.empty else 0.0
-expected_ecpm = float(baseline_df["ecpm"].median()) if not baseline_df.empty else 0.0
-
 # =============================
-# KPI ENGINE (Median + MAD baseline) — for cards + issues
+# KPI ENGINE (Robust baseline) — Z score is still baseline-based
+# KPI cards show Δ vs Yesterday only (context), NOT used for story logic
 # =============================
 kpi_defs = [
     ("revenue", "Revenue", ""),
@@ -268,56 +257,57 @@ kpi = {}
 for key, label, suffix in kpi_defs:
     med, mad = median_mad(baseline_df[key] if key in baseline_df.columns else pd.Series(dtype=float))
     val_today = float(t.get(key, 0.0))
-    val_base = float(base.get(key, 0.0))
+    val_y = float(y.get(key, 0.0)) if y is not None else 0.0
     z = robust_z(val_today, med, mad)
     conf = confidence_from_z(z)
-    delta = pct_change(val_today, val_base) if val_base is not None else 0.0
-    kpi[key] = dict(label=label, suffix=suffix, today=val_today, base=val_base, med=med, mad=mad, z=z, conf=conf, delta=delta)
+    delta_y = pct_change(val_today, val_y) if y is not None else 0.0
+    kpi[key] = dict(label=label, suffix=suffix, today=val_today, yesterday=val_y, med=med, mad=mad, z=z, conf=conf, delta_y=delta_y)
 
 # =============================
-# TOP KPI ROW
+# KPI ROWS
 # =============================
 r1c1, r1c2, r1c3, r1c4, r1c5 = st.columns(5)
-r1c1.markdown(kpi_card("Revenue", kpi["revenue"]["today"], kpi["revenue"]["delta"], kpi["revenue"]["z"], kpi["revenue"]["conf"]), unsafe_allow_html=True)
-r1c2.markdown(kpi_card("Impressions", kpi["impressions"]["today"], kpi["impressions"]["delta"], kpi["impressions"]["z"], kpi["impressions"]["conf"]), unsafe_allow_html=True)
-r1c3.markdown(kpi_card("Ad Requests", kpi["ad_requests"]["today"], kpi["ad_requests"]["delta"], kpi["ad_requests"]["z"], kpi["ad_requests"]["conf"]), unsafe_allow_html=True)
-r1c4.markdown(kpi_card("Fill Rate", kpi["fill_rate"]["today"], kpi["fill_rate"]["delta"], kpi["fill_rate"]["z"], kpi["fill_rate"]["conf"], "%"), unsafe_allow_html=True)
-r1c5.markdown(kpi_card("eCPM", kpi["ecpm"]["today"], kpi["ecpm"]["delta"], kpi["ecpm"]["z"], kpi["ecpm"]["conf"]), unsafe_allow_html=True)
+r1c1.markdown(kpi_card("Revenue", kpi["revenue"]["today"], kpi["revenue"]["delta_y"], kpi["revenue"]["z"], kpi["revenue"]["conf"]), unsafe_allow_html=True)
+r1c2.markdown(kpi_card("Impressions", kpi["impressions"]["today"], kpi["impressions"]["delta_y"], kpi["impressions"]["z"], kpi["impressions"]["conf"]), unsafe_allow_html=True)
+r1c3.markdown(kpi_card("Ad Requests", kpi["ad_requests"]["today"], kpi["ad_requests"]["delta_y"], kpi["ad_requests"]["z"], kpi["ad_requests"]["conf"]), unsafe_allow_html=True)
+r1c4.markdown(kpi_card("Fill Rate", kpi["fill_rate"]["today"], kpi["fill_rate"]["delta_y"], kpi["fill_rate"]["z"], kpi["fill_rate"]["conf"], "%"), unsafe_allow_html=True)
+r1c5.markdown(kpi_card("eCPM", kpi["ecpm"]["today"], kpi["ecpm"]["delta_y"], kpi["ecpm"]["z"], kpi["ecpm"]["conf"]), unsafe_allow_html=True)
 
-# =============================
-# LOSS METER ROW (PowerBI-style)
-# =============================
 m1, m2, m3, m4, m5 = st.columns(5)
 m1.markdown(loss_meter_card(expected_revenue, actual_revenue), unsafe_allow_html=True)
-m2.markdown(kpi_card("RPM", kpi["rpm"]["today"], kpi["rpm"]["delta"], kpi["rpm"]["z"], kpi["rpm"]["conf"]), unsafe_allow_html=True)
-m3.markdown(kpi_card("CTR", kpi["ctr"]["today"], kpi["ctr"]["delta"], kpi["ctr"]["z"], kpi["ctr"]["conf"], "%"), unsafe_allow_html=True)
-m4.markdown(kpi_card("Req/Pageview", kpi["requests_per_pageview"]["today"], kpi["requests_per_pageview"]["delta"], kpi["requests_per_pageview"]["z"], kpi["requests_per_pageview"]["conf"]), unsafe_allow_html=True)
-m5.markdown(kpi_card("Imp/Session", kpi["impressions_per_session"]["today"], kpi["impressions_per_session"]["delta"], kpi["impressions_per_session"]["z"], kpi["impressions_per_session"]["conf"]), unsafe_allow_html=True)
+m2.markdown(kpi_card("RPM", kpi["rpm"]["today"], kpi["rpm"]["delta_y"], kpi["rpm"]["z"], kpi["rpm"]["conf"]), unsafe_allow_html=True)
+m3.markdown(kpi_card("CTR", kpi["ctr"]["today"], kpi["ctr"]["delta_y"], kpi["ctr"]["z"], kpi["ctr"]["conf"], "%"), unsafe_allow_html=True)
+m4.markdown(kpi_card("Req/Pageview", kpi["requests_per_pageview"]["today"], kpi["requests_per_pageview"]["delta_y"], kpi["requests_per_pageview"]["z"], kpi["requests_per_pageview"]["conf"]), unsafe_allow_html=True)
+m5.markdown(kpi_card("Imp/Session", kpi["impressions_per_session"]["today"], kpi["impressions_per_session"]["delta_y"], kpi["impressions_per_session"]["z"], kpi["impressions_per_session"]["conf"]), unsafe_allow_html=True)
 
 # =============================
-# ROOT CAUSE (DECREMENT MATH) + WATERFALLS
+# ROOT CAUSE — ALWAYS VS EXPECTED (STORY CONSISTENT)
 # =============================
-st.subheader("🧠 Root Cause (metric decrement math)")
+st.subheader("🧠 Root Cause Story (vs Expected baseline median)")
 
 left, right = st.columns([2, 1])
 
 with right:
-    st.subheader("🎯 Expected vs Actual")
+    st.subheader("🎯 Expected vs Actual (the story reference)")
     st.metric("Expected (baseline median)", f"{expected_revenue:,.2f}")
     st.metric("Actual (today)", f"{actual_revenue:,.2f}",
               delta=f"{pct_change(actual_revenue, expected_revenue):+.2f}%" if expected_revenue else None)
-    st.metric("Gap", f"{gap:,.2f}",
+    st.metric("Gap (Expected − Actual)", f"{gap:,.2f}",
               delta=f"{safe_div(gap, expected_revenue, 100):+.1f}%" if expected_revenue else None)
-    st.caption(f"Baseline: last **{baseline_days}** days (excluding today). Compare: **{base_label}**.")
+
+    # Yesterday is context only
+    if y is not None:
+        st.caption(f"Context only: Revenue vs Yesterday = {pct_change(actual_revenue, float(y['revenue'])):+.2f}%")
+    st.caption(f"Baseline window: last **{baseline_days}** days (excluding today).")
 
 with left:
-    # Compare-based decomposition (Today vs base_label)
-    rev_b = float(base.get("revenue", 0.0))
-    rev_t = float(t.get("revenue", 0.0))
+    # --- Revenue decomposition vs expected ---
+    rev_b = float(exp["revenue"])
+    rev_t = float(t["revenue"])
     d_rev = rev_t - rev_b
 
-    imp_b = float(base.get("impressions", 0.0))
-    imp_t = float(t.get("impressions", 0.0))
+    imp_b = float(exp["impressions"])
+    imp_t = float(t["impressions"])
 
     ecpm_b = safe_div(rev_b, imp_b, 1000)
     ecpm_t = safe_div(rev_t, imp_t, 1000)
@@ -328,14 +318,14 @@ with left:
     residual = d_rev - (imp_effect + ecpm_effect)
 
     wf_rev = pd.DataFrame({
-        "Step": [f"{base_label} Revenue", "Impressions effect", "eCPM effect", "Residual", "Today Revenue"],
+        "Step": ["Expected Revenue", "Impressions effect", "eCPM effect", "Residual", "Today Revenue"],
         "Value": [rev_b, imp_effect, ecpm_effect, residual, rev_t]
     })
-    st.altair_chart(waterfall_like(wf_rev, "Revenue Decomposition (vs compare)"), use_container_width=True)
+    st.altair_chart(waterfall_like(wf_rev, "Revenue Decomposition (Expected → Today)"), use_container_width=True)
 
-    # Impressions ≈ Requests * FillRate/100
-    req_b = float(base.get("ad_requests", 0.0))
-    req_t = float(t.get("ad_requests", 0.0))
+    # --- Impressions decomposition vs expected ---
+    req_b = float(exp["ad_requests"])
+    req_t = float(t["ad_requests"])
 
     fill_b = safe_div(imp_b, req_b, 100) if req_b else 0.0
     fill_t = safe_div(imp_t, req_t, 100) if req_t else 0.0
@@ -346,89 +336,99 @@ with left:
     imp_residual = d_imp - (req_effect + fill_effect)
 
     wf_imp = pd.DataFrame({
-        "Step": [f"{base_label} Impressions", "Requests effect", "Fill effect", "Residual", "Today Impressions"],
+        "Step": ["Expected Impressions", "Requests effect", "Fill effect", "Residual", "Today Impressions"],
         "Value": [imp_b, req_effect, fill_effect, imp_residual, imp_t]
     })
-    st.altair_chart(waterfall_like(wf_imp, "Impressions Decomposition (vs compare)"), use_container_width=True)
+    st.altair_chart(waterfall_like(wf_imp, "Impressions Decomposition (Expected → Today)"), use_container_width=True)
 
-    # -----------------------------
-    # ROOT CAUSE SUMMARY (minimal)
-    # -----------------------------
-    st.markdown("### ✅ Root Cause Summary")
+    # =============================
+    # STORY CONFIDENCE (RESIDUAL RATIO)
+    # =============================
+    st.markdown("### 🎚️ Story Confidence")
+    denom = abs(d_rev) if abs(d_rev) > 1e-9 else max(abs(rev_b), 1.0)
+    residual_ratio = abs(residual) / denom  # how much of change is unexplained
 
-    direction = "down" if d_rev < 0 else "up"
-    st.write(f"• Revenue moved **{direction} {abs(d_rev):,.2f}** vs **{base_label}**.")
+    if residual_ratio <= 0.10:
+        story_conf = "High"
+    elif residual_ratio <= 0.25:
+        story_conf = "Medium"
+    else:
+        story_conf = "Low"
 
-    denom = abs(d_rev) if abs(d_rev) > 1e-9 else 1.0
-    imp_share = abs(imp_effect) / denom * 100
-    ecpm_share = abs(ecpm_effect) / denom * 100
-    st.write(f"• Approx split: **{imp_share:.0f}% Impressions**, **{ecpm_share:.0f}% eCPM**.")
+    st.write(f"• Residual ratio: **{residual_ratio:.2f}** → Confidence: **{story_conf}**")
+    if story_conf == "Low":
+        st.warning("Residual is large. This often means revenue/impressions reporting lag or merged data mismatch. Treat the story as directional for this day.")
 
-    # Identify main driver
-    contribs = [("Impressions", imp_effect), ("eCPM", ecpm_effect), ("Residual", residual)]
-    top_driver, top_val = sorted(contribs, key=lambda x: abs(x[1]), reverse=True)[0]
+    # =============================
+    # ROOT CAUSE SUMMARY (LOSS-FIRST, NOT BUZZ)
+    # Uses only LOSS contributions when gap exists
+    # =============================
+    st.markdown("### ✅ Root Cause Summary (money story)")
 
-    if top_driver == "Impressions":
-        st.write(f"• Primary driver: **Impressions** (impact {imp_effect:,.2f}).")
-        inner = [("Requests", req_effect), ("Fill", fill_effect)]
-        inner_driver, inner_val = sorted(inner, key=lambda x: abs(x[1]), reverse=True)[0]
-        if inner_driver == "Requests":
-            st.write(f"• Impressions moved mainly due to **Requests** (impact {req_effect:,.0f} impressions).")
-            pv_b = float(base.get("pageviews", 0.0))
-            pv_t = float(t.get("pageviews", 0.0))
-            rpp_b = safe_div(req_b, pv_b, 1)
-            rpp_t = safe_div(req_t, pv_t, 1)
-            if rpp_t < rpp_b * 0.9:
-                st.write("• Pattern matches **Ad loading issue** (requests/pageview decreased).")
-            else:
-                st.write("• Pattern matches **Traffic/engagement change** (requests/pageview stable).")
+    if expected_revenue <= 0:
+        st.write("• Not enough baseline revenue to build a story.")
+    else:
+        if gap > 0:
+            st.write(f"• Today missed expected revenue by **{gap:,.2f}**.")
+
+            # Convert effects into "loss contributions" (only count negative contributors when revenue dropped vs expected)
+            # If d_rev is negative, then losses are positive numbers from negative effects.
+            loss_from_imp = max(-imp_effect, 0.0)
+            loss_from_ecpm = max(-ecpm_effect, 0.0)
+            loss_unexplained = max(-residual, 0.0)
+
+            denom_loss = (loss_from_imp + loss_from_ecpm + loss_unexplained) if (loss_from_imp + loss_from_ecpm + loss_unexplained) > 0 else 1.0
+
+            s_imp = loss_from_imp / denom_loss * 100
+            s_ecpm = loss_from_ecpm / denom_loss * 100
+            s_res = loss_unexplained / denom_loss * 100
+
+            st.write(f"• Loss split (Expected → Today): **{s_imp:.0f}% from Impressions**, **{s_ecpm:.0f}% from eCPM**, **{s_res:.0f}% unexplained (residual)**.")
+
+            # Primary + Secondary driver (based on loss parts)
+            parts = [("Impressions", loss_from_imp), ("eCPM", loss_from_ecpm), ("Residual", loss_unexplained)]
+            parts_sorted = sorted(parts, key=lambda x: x[1], reverse=True)
+
+            primary, primary_val = parts_sorted[0]
+            secondary, secondary_val = parts_sorted[1]
+
+            st.write(f"• Primary driver: **{primary}** (≈ {primary_val:,.2f} of the loss).")
+            if secondary_val > 0:
+                st.write(f"• Secondary driver: **{secondary}** (≈ {secondary_val:,.2f}).")
+
+            # If impressions is the driver, explain whether it is Requests or Fill
+            if primary == "Impressions":
+                # compute impression loss split
+                imp_loss_from_req = max(-req_effect * (ecpm_b / 1000), 0.0)  # converted to revenue-equivalent for readability
+                imp_loss_from_fill = max(-fill_effect * (ecpm_b / 1000), 0.0)
+                denom_imp_loss = (imp_loss_from_req + imp_loss_from_fill) if (imp_loss_from_req + imp_loss_from_fill) > 0 else 1.0
+
+                st.write(f"• Inside Impressions: **{imp_loss_from_req/denom_imp_loss*100:.0f}% Requests**, **{imp_loss_from_fill/denom_imp_loss*100:.0f}% Fill** (revenue-equivalent).")
+
+                # Improved “ad loading vs traffic mix” heuristic
+                pv_b = float(exp["pageviews"])
+                pv_t = float(t["pageviews"])
+                rpp_b = safe_div(req_b, pv_b, 1)
+                rpp_t = safe_div(req_t, pv_t, 1)
+
+                pageviews_stable = (pv_b > 0 and pv_t > pv_b * 0.95)
+                rpp_down = (rpp_b > 0 and rpp_t < rpp_b * 0.90)
+
+                if pageviews_stable and rpp_down:
+                    st.write("• Pattern: **Pageviews stable but Requests/Pageview down** → likely **ad loading / tag / CMP / adblock / template issue**.")
+                else:
+                    st.write("• Pattern: Requests aligned with pageview changes → likely **traffic mix / engagement / page template mix change**.")
+
+            if primary == "eCPM":
+                st.write("• eCPM drop means buyers paid less per 1,000 impressions. Next step: add segmentation (country/device/ad unit) to pinpoint where value fell.")
+
         else:
-            st.write(f"• Impressions moved mainly due to **Fill** (impact {fill_effect:,.0f} impressions).")
-            st.write("• Pattern matches **Demand/blocks/floors/policy** type issue (requests exist, not filled).")
-
-    elif top_driver == "eCPM":
-        st.write(f"• Primary driver: **eCPM** (impact {ecpm_effect:,.2f}).")
-        st.write("• Next step to pinpoint: add segmentation (country/device/ad unit) to see where value dropped.")
-    else:
-        st.write("• Residual unusually large → likely data mismatch (lag/merge issues) or both drivers moved sharply.")
-
-    # CTR diagnostic flag only (no long text)
-    ctr_b = safe_div(float(base.get("clicks", 0.0)), imp_b, 100) if imp_b else 0.0
-    ctr_t = safe_div(float(t.get("clicks", 0.0)), imp_t, 100) if imp_t else 0.0
-    if ctr_b > 0 and ctr_t > ctr_b * 1.5:
-        st.write("• CTR spike flag (diagnostic): layout/ad mix/policy-risk possibility.")
-    elif ctr_b > 0 and ctr_t < ctr_b * 0.6:
-        st.write("• CTR drop flag (diagnostic): engagement/ad mix changed.")
-
-    # -----------------------------
-    # LOSS ALLOCATION (Expected → Today)
-    # -----------------------------
-    st.markdown("### 💸 Loss Allocation (Expected → Today)")
-    if expected_revenue > 0 and expected_impressions > 0:
-        # Allocate expected→today gap into impressions vs eCPM (using expected as base)
-        # ΔRev ≈ (ΔImp * expected_ecpm/1000) + (todayImp * ΔeCPM/1000)
-        # Convert to positive "loss contributions"
-        imp_contrib = (imp_t - expected_impressions) * (expected_ecpm / 1000)
-        ecpm_contrib = imp_t * ((ecpm_t - expected_ecpm) / 1000)
-
-        loss_imp = max(-imp_contrib, 0.0)
-        loss_ecpm = max(-ecpm_contrib, 0.0)
-
-        total_loss = max(expected_revenue - actual_revenue, 0.0)
-        denom2 = (loss_imp + loss_ecpm) if (loss_imp + loss_ecpm) > 0 else 1.0
-        share_imp2 = loss_imp / denom2 * 100
-        share_ecpm2 = loss_ecpm / denom2 * 100
-
-        st.write(f"• Estimated loss today (vs expected): **{total_loss:,.2f}**")
-        st.write(f"• Loss split: **{share_imp2:.0f}% from Impressions**, **{share_ecpm2:.0f}% from eCPM**")
-    else:
-        st.write("• Not enough baseline data to allocate expected-loss into Impressions vs eCPM.")
+            st.write(f"• Today is at or above expected revenue (Gap: {gap:,.2f}). No loss story required.")
 
 # =============================
 # TRENDS
 # =============================
 st.subheader("📈 Trends (baseline window → today)")
-
 t1, t2 = st.columns(2)
 with t1:
     st.altair_chart(line_chart(display_df, ["revenue", "ecpm"], "Revenue vs eCPM"), use_container_width=True)
@@ -443,59 +443,9 @@ with t4:
                                "Ad Loading & Engagement Density"), use_container_width=True)
 
 # =============================
-# TOP ISSUES TABLE
-# =============================
-st.subheader("🧯 Top Issues (ranked by drop + anomaly)")
-
-metrics_for_table = [
-    ("revenue", "Revenue"),
-    ("sessions", "Sessions"),
-    ("pageviews", "Pageviews"),
-    ("pageviews_per_session", "Pageviews/Session"),
-    ("ad_requests", "Ad Requests"),
-    ("requests_per_pageview", "Requests/Pageview"),
-    ("fill_rate", "Fill Rate"),
-    ("impressions", "Impressions"),
-    ("impressions_per_session", "Impressions/Session"),
-    ("ecpm", "eCPM"),
-    ("rpm", "RPM"),
-    ("ctr", "CTR"),
-]
-
-rows = []
-for key, label in metrics_for_table:
-    med, mad = median_mad(baseline_df[key] if key in baseline_df.columns else pd.Series(dtype=float))
-    val_today = float(t.get(key, 0.0))
-    val_base = float(base.get(key, 0.0))
-    z = robust_z(val_today, med, mad)
-    conf = confidence_from_z(z)
-    delta = pct_change(val_today, val_base) if val_base else 0.0
-
-    score = 0.0
-    if z < 0:
-        score += abs(z) * 2.0
-    if delta < 0:
-        score += abs(delta) / 10.0
-
-    rows.append({
-        "Metric": label,
-        "Today": val_today,
-        f"Compare ({base_label})": val_base,
-        "Δ %": delta,
-        "Baseline Median": med,
-        "Robust Z": z,
-        "Confidence %": conf,
-        "_score": score,
-    })
-
-issues = pd.DataFrame(rows).sort_values("_score", ascending=False).drop(columns=["_score"]).head(12)
-st.dataframe(issues, use_container_width=True)
-
-# =============================
 # SANITY CHECKS (DATA INTEGRITY)
 # =============================
 st.subheader("🧪 Data Sanity Checks")
-
 checks = []
 if t["sessions"] > 0 and t["ad_requests"] == 0:
     checks.append("Sessions > 0 but Ad Requests = 0 → tagging/ad call issue or missing GAM data.")
@@ -513,6 +463,7 @@ else:
         st.warning(c)
 
 st.caption(
-    "Ratios are derived from daily totals (never summed). Root cause follows: Revenue → (Impressions + eCPM), "
-    "Impressions → (Requests + Fill). Loss meter compares Actual vs Expected (baseline median)."
+    "Story reference is always Expected baseline median. Yesterday is context only. "
+    "Ratios derived from totals. Revenue → (Impressions + eCPM). Impressions → (Requests + Fill). "
+    "Story confidence decreases when residual is large."
 )
