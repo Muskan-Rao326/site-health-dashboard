@@ -1,17 +1,24 @@
 # app.py
-# Publisher Performance Dashboard (GA4 + GAM) — clean PowerBI-like
-# FIXES:
-# - Chips wrap properly (no overflow)
-# - "Why Revenue Missed" + "Second-Level Driver" always visible (text color fixed)
-# - UI stays clean (no collapse)
-# - Logic unchanged: Expected = baseline median of totals; ratios derived from totals; Delta = Today vs Expected
-# - Z-score text-only label: Noise-like vs Statistically abnormal
+# Publisher Performance Dashboard (GA4 + GAM) — Professional + clean (PowerBI-like)
+#
+# ✅ Correct math:
+#   - Totals are summed per day
+#   - Ratios are derived from totals (never summed)
+#
+# ✅ Baseline (Expected):
+#   - Expected totals = median of last N days (excluding selected date)
+#   - Expected ratios are derived from expected totals
+#
+# ✅ Delta:
+#   - Delta % = (Today - Expected) / Expected * 100
+#
+# ✅ Z-score label:
+#   - “Noise-like movement” vs “Statistically abnormal” (text only)
 
 import streamlit as st
 import pandas as pd
 import numpy as np
 import altair as alt
-import textwrap
 from datetime import timedelta
 
 # =========================
@@ -46,6 +53,7 @@ st.markdown(
   border-radius: 12px;
   padding: 14px 16px;
   box-shadow: 0 6px 16px rgba(15,23,42,0.06);
+  overflow: hidden; /* ✅ prevents spill */
 }
 .panel-title{
   font-size: 16px;
@@ -86,11 +94,12 @@ st.markdown(
   padding: 12px 14px;
   box-shadow: 0 6px 16px rgba(15,23,42,0.06);
   height: 98px;
+  min-width: 0; /* ✅ important inside grids */
 }
 .mini-label{ font-size: 13px; font-weight: 800; color:#0f172a; opacity: 0.85;}
-.mini-row{ margin-top: 6px; display:flex; align-items: baseline; gap: 8px; }
+.mini-row{ margin-top: 6px; display:flex; align-items: baseline; gap: 8px; min-width:0; }
 .mini-value{ font-size: 28px; font-weight: 950; color:#0b1220; line-height: 1.0; }
-.mini-delta{ font-size: 13px; font-weight: 950; }
+.mini-delta{ font-size: 13px; font-weight: 950; white-space: nowrap; }
 .mini-bar{ height:6px; border-radius: 10px; margin-top: 10px; background:#e2e8f0; overflow:hidden; }
 .mini-bar > div{ height:100%; border-radius:10px; }
 
@@ -104,7 +113,7 @@ st.markdown(
   color:#0b1220;
 }
 
-/* ✅ FIX: chips wrap properly + no overflow */
+/* ✅ FIXED CHIPS (NO OVERFLOW EVER) */
 .chips{
   margin-top: 12px;
   display:flex;
@@ -112,11 +121,9 @@ st.markdown(
   flex-wrap:wrap;
   align-items:flex-start;
   max-width:100%;
+  min-width:0;
 }
 .chip{
-  display:inline-flex;
-  align-items:center;
-  justify-content:center;
   padding: 8px 12px;
   border-radius: 10px;
   font-weight: 900;
@@ -124,17 +131,23 @@ st.markdown(
   border: 1px solid #e5e7eb;
   background:#f1f5f9;
   color:#0b1220;
-  white-space:nowrap;
-  line-height: 1;
+
+  /* hard overflow protection */
+  flex: 0 1 auto;     /* allow shrink */
+  min-width: 0;       /* critical in streamlit columns */
+  max-width: 100%;
+  white-space: normal; /* allow wrap */
+  word-break: break-word;
+  overflow-wrap:anywhere;
+  line-height: 1.15;
 }
 .chip-green{ background:#dcfce7; border-color:#22c55e; }
 .chip-red{ background:#fee2e2; border-color:#ef4444; }
 .chip-amber{ background:#ffedd5; border-color:#f59e0b; }
 
-/* Text */
 .small-note{ font-size: 12px; color:#475569; font-weight: 650; margin-top: 8px; }
-.body-text{ font-size: 13px; font-weight: 850; color:#0b1220; line-height: 1.55; } /* ✅ FIX: readable text */
-.muted{ color:#475569; font-weight: 700; font-size: 12px; }
+.body-text{ font-size: 13px; color:#0b1220; font-weight: 800; line-height: 1.55; }
+
 hr.soft { border:none; height:1px; background:#e7eef7; margin: 12px 0; }
 </style>
 """,
@@ -144,9 +157,6 @@ hr.soft { border:none; height:1px; background:#e7eef7; margin: 12px 0; }
 # =========================
 # HELPERS
 # =========================
-def html(s: str) -> str:
-    return textwrap.dedent(s).strip()
-
 def safe_div(n, d, mult=1.0):
     return (n / d) * mult if d and d != 0 else 0.0
 
@@ -184,7 +194,6 @@ def mini_card(label, value_str, delta_pct):
     mag = min(abs(delta_pct) / 40.0, 1.0)
     color = "#ef4444" if delta_pct < 0 else "#16a34a"
     sign = "▼" if delta_pct < 0 else "▲"
-
     if abs(delta_pct) < 1:
         txt = "= 0%"
         color_txt = "#0b1220"
@@ -207,7 +216,6 @@ def mini_card(label, value_str, delta_pct):
     """
 
 def panel(title, inner_html):
-    inner_html = html(inner_html)
     return f"""
     <div class="panel">
       <div class="panel-title">{title}</div>
@@ -216,23 +224,21 @@ def panel(title, inner_html):
     """
 
 # =========================
-# Z-SCORE TEXT LABEL
+# Z-SCORE LABEL (TEXT ONLY)
 # =========================
-def z_label(value: float, baseline_series: pd.Series):
+def zscore_label(value: float, baseline_series: pd.Series) -> str:
     s = pd.to_numeric(baseline_series, errors="coerce").dropna()
-    if len(s) < 5:
+    if len(s) < 6:
         return "Noise-like movement"
-
     mu = float(s.mean())
-    sigma = float(s.std(ddof=0))
-
-    if sigma <= 1e-9:
+    sd = float(s.std(ddof=0))
+    if sd <= 1e-9:
+        # fallback to percent rule
         if mu == 0:
             return "Noise-like movement"
-        pct = safe_div(value - mu, mu, 100)
-        return "Statistically abnormal" if abs(pct) >= 20 else "Noise-like movement"
-
-    z = (value - mu) / sigma
+        p = safe_div(value - mu, mu, 100)
+        return "Statistically abnormal" if abs(p) >= 20 else "Noise-like movement"
+    z = (value - mu) / sd
     return "Statistically abnormal" if abs(z) >= 2 else "Noise-like movement"
 
 # =========================
@@ -253,7 +259,7 @@ if not uploaded:
 
 df_raw = load_csv(uploaded)
 
-# Site selector (optional)
+# Optional site selector
 site = None
 if "site_name" in df_raw.columns:
     sites = sorted(df_raw["site_name"].dropna().unique().tolist())
@@ -270,25 +276,26 @@ if missing:
 for c in base_cols:
     df_raw[c] = pd.to_numeric(df_raw[c], errors="coerce").fillna(0.0)
 
+# Daily totals
 daily = df_raw.groupby("date", as_index=False)[base_cols].sum().sort_values("date")
 
-# =========================
-# DERIVED METRICS
-# =========================
+# Derived ratios (from totals)
 daily["ecpm"] = daily.apply(lambda r: safe_div(r["revenue"], r["impressions"], 1000), axis=1)
 daily["fill_rate"] = daily.apply(lambda r: safe_div(r["impressions"], r["ad_requests"], 100), axis=1)
 daily["requests_per_page"] = daily.apply(lambda r: safe_div(r["ad_requests"], r["pageviews"], 1), axis=1)
 daily["ctr"] = daily.apply(lambda r: safe_div(r["clicks"], r["impressions"], 100), axis=1)
 
-# Your metrics
-daily["rev_per_1k_sessions"] = daily.apply(lambda r: safe_div(r["revenue"], r["sessions"], 1000), axis=1)  # RPM style
-daily["rpu"] = daily.apply(lambda r: safe_div(r["revenue"], r["users"], 1), axis=1)
-
-# Pipeline ratios
+# Additional pipeline ratios
 daily["pv_per_session"] = daily.apply(lambda r: safe_div(r["pageviews"], r["sessions"], 1), axis=1)
 daily["imp_per_page"] = daily.apply(lambda r: safe_div(r["impressions"], r["pageviews"], 1), axis=1)
 daily["imp_per_session"] = daily.apply(lambda r: safe_div(r["impressions"], r["sessions"], 1), axis=1)
 daily["clicks_per_session"] = daily.apply(lambda r: safe_div(r["clicks"], r["sessions"], 1), axis=1)
+
+# RPM + RPU definitions (as you asked)
+# RPM = revenue per session per 1000 sessions
+daily["rpm"] = daily.apply(lambda r: safe_div(r["revenue"], r["sessions"], 1000), axis=1)
+# RPU = revenue per user
+daily["rpu"] = daily.apply(lambda r: safe_div(r["revenue"], r["users"], 1), axis=1)
 
 # =========================
 # CONTROLS
@@ -314,60 +321,59 @@ t = today_df.iloc[0].to_dict()
 baseline_df = daily[(daily["date"] < today) & (daily["date"] >= baseline_start)]
 
 # =========================
-# EXPECTED
+# EXPECTED (baseline median totals)
 # =========================
 if baseline_df.empty:
     exp = {c: 0.0 for c in base_cols}
     exp.update({
         "ecpm": 0.0, "fill_rate": 0.0, "requests_per_page": 0.0, "ctr": 0.0,
-        "rev_per_1k_sessions": 0.0, "rpu": 0.0,
-        "pv_per_session": 0.0, "imp_per_page": 0.0, "imp_per_session": 0.0, "clicks_per_session": 0.0
+        "pv_per_session": 0.0, "imp_per_page": 0.0, "imp_per_session": 0.0, "clicks_per_session": 0.0,
+        "rpm": 0.0, "rpu": 0.0,
     })
 else:
     exp_tot = baseline_df[base_cols].median(numeric_only=True).to_dict()
     exp = dict(exp_tot)
 
+    # derive expected ratios from expected totals
     exp["ecpm"] = safe_div(exp["revenue"], exp["impressions"], 1000)
     exp["fill_rate"] = safe_div(exp["impressions"], exp["ad_requests"], 100)
     exp["requests_per_page"] = safe_div(exp["ad_requests"], exp["pageviews"], 1)
     exp["ctr"] = safe_div(exp["clicks"], exp["impressions"], 100)
-
-    exp["rev_per_1k_sessions"] = safe_div(exp["revenue"], exp["sessions"], 1000)
-    exp["rpu"] = safe_div(exp["revenue"], exp["users"], 1)
 
     exp["pv_per_session"] = safe_div(exp["pageviews"], exp["sessions"], 1)
     exp["imp_per_page"] = safe_div(exp["impressions"], exp["pageviews"], 1)
     exp["imp_per_session"] = safe_div(exp["impressions"], exp["sessions"], 1)
     exp["clicks_per_session"] = safe_div(exp["clicks"], exp["sessions"], 1)
 
-# =========================
-# DELTA %
-# =========================
+    exp["rpm"] = safe_div(exp["revenue"], exp["sessions"], 1000)
+    exp["rpu"] = safe_div(exp["revenue"], exp["users"], 1)
+
+# Deltas vs Expected
 d = {}
 for k in [
     "revenue", "ecpm", "fill_rate", "requests_per_page",
     "users", "sessions", "pageviews", "ad_requests", "impressions", "clicks",
-    "rev_per_1k_sessions", "rpu", "ctr",
-    "pv_per_session", "imp_per_page", "imp_per_session", "clicks_per_session"
+    "rpm", "rpu", "ctr",
+    "pv_per_session", "imp_per_page", "imp_per_session", "clicks_per_session",
 ]:
     d[k] = pct_change(t.get(k, 0.0), exp.get(k, 0.0))
 
-# Z-score label for revenue
-stat_flag = "Noise-like movement"
+# Z-score label (revenue)
+noise_label = "Noise-like movement"
 if not baseline_df.empty:
-    stat_flag = z_label(float(t["revenue"]), baseline_df["revenue"])
+    noise_label = zscore_label(float(t["revenue"]), baseline_df["revenue"])
 
 # =========================
 # HEADER
 # =========================
 domain = site if site else "abc.com"
 st.markdown(
-    html(f"""
+    f"""
     <div class="header">
       <div class="header-title">Publisher Performance Dashboard <span style="font-weight:650;">for {domain}</span></div>
-      <div class="header-sub">Expected = baseline median of last {baseline_days} days (excluding selected date) • GA4 + GAM combined</div>
+      <div class="header-sub">Expected = baseline median of last {baseline_days} days (excluding selected date) • Delta = Today vs Expected</div>
     </div>
-    """),
+    """,
     unsafe_allow_html=True,
 )
 st.write("")
@@ -385,11 +391,11 @@ with c3:
     st.markdown(kpi_card("Fill Rate", f"{t['fill_rate']:.0f}%", d["fill_rate"]), unsafe_allow_html=True)
 with c4:
     st.markdown(
-        html(f"""
+        f"""
         <div class="kpi-card" style="height:120px;">
           <div class="kpi-label">Requests Per Page</div>
           <div style="display:flex; align-items:center; justify-content:space-between; gap:14px; margin-top:6px;">
-            <div class="kpi-value" style="font-size:38px;">{t['requests_per_page']:.1f}</div>
+            <div class="kpi-value" style="font-size:38px;">{t['requests_per_page']:.2f}</div>
             <div style="width:1px; height:54px; background:#e5e7eb;"></div>
             <div style="text-align:center;">
               <div class="kpi-value" style="font-size:34px;">{d['requests_per_page']:+.0f}%</div>
@@ -398,116 +404,75 @@ with c4:
           </div>
           <span class="kpi-delta {badge_class(d['requests_per_page'])}">{d['requests_per_page']:+.0f}%</span>
         </div>
-        """),
+        """,
         unsafe_allow_html=True,
     )
 
 st.write("")
 
 # =========================
-# INSIGHT ENGINE
+# INSIGHT ENGINE (pipeline based)
 # =========================
-def root_cause_story(t, exp):
-    rev_t, rev_b = float(t["revenue"]), float(exp["revenue"])
-    imp_t, imp_b = float(t["impressions"]), float(exp["impressions"])
-    req_t, req_b = float(t["ad_requests"]), float(exp["ad_requests"])
-
-    ecpm_t = safe_div(rev_t, imp_t, 1000)
-    ecpm_b = safe_div(rev_b, imp_b, 1000)
-
-    # Revenue decomposition: Rev = Imp * eCPM / 1000
-    d_rev = rev_t - rev_b
-    imp_effect = (imp_t - imp_b) * (ecpm_b / 1000)
-    ecpm_effect = imp_t * ((ecpm_t - ecpm_b) / 1000)
-    residual = d_rev - (imp_effect + ecpm_effect)
-
-    denom = abs(d_rev) if abs(d_rev) > 1e-9 else max(abs(rev_b), 1.0)
-    residual_ratio = abs(residual) / denom
-    if residual_ratio <= 0.10:
-        conf = "High"
-    elif residual_ratio <= 0.25:
-        conf = "Medium"
-    else:
-        conf = "Low"
-
-    gap = rev_b - rev_t  # positive = missed
-
-    # ✅ FIX: compute miss-only split correctly (only negative contributors)
-    loss_imp = max(-(imp_effect), 0.0) if gap > 0 else 0.0
-    loss_ecpm = max(-(ecpm_effect), 0.0) if gap > 0 else 0.0
-    loss_res = max(-(residual), 0.0) if gap > 0 else 0.0
-    denom_loss = (loss_imp + loss_ecpm + loss_res) if (loss_imp + loss_ecpm + loss_res) > 0 else 1.0
-
-    split = {
-        "gap": gap,
-        "loss_imp_pct": (loss_imp / denom_loss * 100) if gap > 0 else 0.0,
-        "loss_ecpm_pct": (loss_ecpm / denom_loss * 100) if gap > 0 else 0.0,
-        "loss_res_pct": (loss_res / denom_loss * 100) if gap > 0 else 0.0,
-        "imp_effect": imp_effect,
-        "ecpm_effect": ecpm_effect,
-        "residual": residual,
-        "residual_ratio": residual_ratio,
-        "conf": conf,
-    }
-
-    # Pipeline-based diagnosis
-    pvps_t, pvps_b = float(t["pv_per_session"]), float(exp["pv_per_session"])
-    rpp_t, rpp_b = float(t["requests_per_page"]), float(exp["requests_per_page"])
-    imp_pv_t, imp_pv_b = float(t["imp_per_page"]), float(exp["imp_per_page"])
-    ctr_t, ctr_b = float(t["ctr"]), float(exp["ctr"])
-    ecpm_t2, ecpm_b2 = float(t["ecpm"]), float(exp["ecpm"])
-
-    pvps_down = pvps_b > 0 and pvps_t <= pvps_b * 0.90
-    rpp_down = rpp_b > 0 and rpp_t <= rpp_b * 0.90
-    imp_pv_down = imp_pv_b > 0 and imp_pv_t <= imp_pv_b * 0.90
-    ctr_down = ctr_b > 0 and ctr_t <= ctr_b * 0.90
-    ecpm_down = ecpm_b2 > 0 and ecpm_t2 <= ecpm_b2 * 0.90
-
+def pipeline_diagnosis(t, exp):
     chips = []
     story = []
 
+    gap = float(exp["revenue"]) - float(t["revenue"])
     if gap > 0:
         story.append(f"Today missed expected revenue by ${gap:,.0f} (Expected baseline median).")
-        story.append(f"Miss split: {split['loss_imp_pct']:.0f}% Impressions, {split['loss_ecpm_pct']:.0f}% eCPM, {split['loss_res_pct']:.0f}% residual.")
+
+    users_down = exp["users"] > 0 and t["users"] <= exp["users"] * 0.90
+    sessions_down = exp["sessions"] > 0 and t["sessions"] <= exp["sessions"] * 0.90
+    pvps_down = exp["pv_per_session"] > 0 and t["pv_per_session"] <= exp["pv_per_session"] * 0.90
+    rpp_down = exp["requests_per_page"] > 0 and t["requests_per_page"] <= exp["requests_per_page"] * 0.90
+    imp_pv_down = exp["imp_per_page"] > 0 and t["imp_per_page"] <= exp["imp_per_page"] * 0.90
+    ecpm_down = exp["ecpm"] > 0 and t["ecpm"] <= exp["ecpm"] * 0.90
+
+    # Traffic/Engagement first
+    if users_down or sessions_down:
+        issue = "Traffic Problem"
+        if users_down: chips.append(("Users Down", "red"))
+        if sessions_down: chips.append(("Sessions Down", "red"))
+        story.append("Traffic dropped → fewer sessions/pageviews → fewer ad opportunities.")
+        return issue, chips, story
 
     if pvps_down:
         issue = "Engagement Problem"
-        chips = [("PV/Session Down", "red"), ("Traffic Quality", "amber")]
-        story.append("Users are visiting fewer pages per session → fewer ad opportunities created upstream.")
-        return issue, chips, story, split
+        chips.append(("PV/Session Down", "red"))
+        chips.append(("Fewer pages viewed", "amber"))
+        story.append("Users are visiting fewer pages per session → fewer ad slots exposed per visit.")
+        return issue, chips, story
 
-    if (not pvps_down) and rpp_down:
+    # Setup / tag
+    if rpp_down:
         issue = "Tag / Ad-call Problem"
-        chips = [("Requests/PV Down", "red"), ("PV/Session OK", "green")]
-        story.append("Engagement is stable but Requests/PV dropped → ad calls missing (tag/CMP/template/adblock/lazy-load).")
-        return issue, chips, story, split
+        chips.append(("Requests/PV Down", "red"))
+        chips.append(("Check tags / CMP", "amber"))
+        story.append("Pageviews are present but ad requests per pageview dropped → missing ad calls (tag/template/lazyload/CMP/adblock).")
+        return issue, chips, story
 
-    if (not rpp_down) and imp_pv_down:
+    # Demand/fill
+    if imp_pv_down:
         issue = "Demand / Fill Problem"
-        chips = [("Imp/PV Down", "red"), ("Requests/PV OK", "green")]
-        story.append("Requests/PV is present but Imp/PV dropped → fill/demand/floors/blocks/policy/buyer loss.")
-        return issue, chips, story, split
+        chips.append(("Imp/PV Down", "red"))
+        chips.append(("Requests OK", "green"))
+        story.append("Requests exist but impressions per page dropped → fill/demand/floors/blocks/policy/buyer loss.")
+        return issue, chips, story
 
+    # Pricing
     if ecpm_down:
         issue = "Pricing / eCPM Problem"
-        chips = [("eCPM Down", "red"), ("Delivery OK", "green")]
-        story.append("Delivery is stable but eCPM dropped → buyers paying less per 1,000 impressions.")
-        return issue, chips, story, split
+        chips.append(("eCPM Down", "red"))
+        chips.append(("Delivery OK", "green"))
+        story.append("Delivery is stable but eCPM fell → buyers paying less per 1,000 impressions.")
+        return issue, chips, story
 
-    if ctr_down:
-        issue = "Placement / CTR Problem"
-        chips = [("CTR Down", "red"), ("Delivery OK", "green")]
-        story.append("Ads are delivering but CTR dropped → placement/viewability/creative mix changed.")
-        return issue, chips, story, split
+    issue = "Normal / Mixed"
+    chips.append(("No major break", "green"))
+    story.append("Pipeline looks stable vs baseline. Investigate segments if revenue still fluctuates (geo/device/ad units).")
+    return issue, chips, story
 
-    issue = "Mixed Movement"
-    chips = [("Check Segments", "amber")]
-    if gap > 0 and split["conf"] == "Low":
-        story.append("Residual is high → reporting lag / merge mismatch likely. Treat as directional.")
-    return issue, chips, story, split
-
-
-issue_title, chips, story_lines, split = root_cause_story(t, exp)
+issue_title, chips, story_lines = pipeline_diagnosis(t, exp)
 
 # =========================
 # MIDDLE ROW
@@ -526,18 +491,14 @@ with left:
             cls = "chip chip-amber"
         chips_html += f'<div class="{cls}">{label}</div>'
 
-    conf = split["conf"]
-    conf_color = "#16a34a" if conf == "High" else "#f59e0b" if conf == "Medium" else "#ef4444"
-
     story_html = "<br/>".join([f"• {s}" for s in story_lines]) if story_lines else "• No story notes."
 
     inner = f"""
-    <div class="diag-strip">Issue Detected: <span style="font-weight:950;">{issue_title}</span></div>
-    <div class="chips">{chips_html}</div>
-    <hr class="soft"/>
-    <div class="body-text">{story_html}</div>
-    <div class="small-note"><b>Story confidence:</b> <span style="color:{conf_color}; font-weight:950;">{conf}</span>
-    &nbsp; (Residual ratio {split['residual_ratio']:.2f})</div>
+      <div class="diag-strip">Issue Detected: <span style="font-weight:950;">{issue_title}</span></div>
+      <div class="chips">{chips_html}</div>
+      <hr class="soft"/>
+      <div class="body-text">{story_html}</div>
+      <div class="small-note"><b>Signal check:</b> {noise_label} (revenue vs baseline variability)</div>
     """
     st.markdown(panel("Diagnosis", inner), unsafe_allow_html=True)
 
@@ -548,8 +509,8 @@ with right:
       {mini_card("Sessions", fmt_compact(t["sessions"]), d["sessions"])}
       {mini_card("Pageviews", fmt_compact(t["pageviews"]), d["pageviews"])}
       {mini_card("Ad Requests", fmt_compact(t["ad_requests"]), d["ad_requests"])}
-      {mini_card("Rev / 1K Sessions", f"${t['rev_per_1k_sessions']:.2f}", d["rev_per_1k_sessions"])}
-      {mini_card("RPU", f"${t['rpu']:.2f}", d["rpu"])}
+      {mini_card("RPM (Rev/1K Sessions)", f"${t['rpm']:.2f}", d["rpm"])}
+      {mini_card("RPU (Rev/User)", f"${t['rpu']:.2f}", d["rpu"])}
     </div>
 
     <div style="height:10px;"></div>
@@ -563,14 +524,14 @@ with right:
       {mini_card("Clicks / Session", f"{t['clicks_per_session']:.4f}", d["clicks_per_session"])}
     </div>
 
-    <div class="small-note">All deltas are vs <b>Expected baseline median</b> (totals median, ratios derived from totals).</div>
+    <div class="small-note">All deltas are vs <b>Expected baseline median</b> (totals median; ratios derived from totals).</div>
     """
     st.markdown(panel("Key Metrics Overview", inner), unsafe_allow_html=True)
 
 st.write("")
 
 # =========================
-# STORY CARDS
+# LOSS + DRIVER CARDS
 # =========================
 s1, s2, s3 = st.columns([1.2, 1, 1], gap="large")
 
@@ -579,23 +540,21 @@ gap_pct = safe_div(gap, float(exp["revenue"]), 100) if float(exp["revenue"]) > 0
 status = "Normal" if gap_pct <= 5 else "Watch" if gap_pct <= 15 else "Critical"
 status_color = "#16a34a" if status == "Normal" else "#f59e0b" if status == "Watch" else "#ef4444"
 
-stat_flag_color = "#ef4444" if stat_flag == "Statistically abnormal" else "#64748b"
-
 with s1:
     inner = f"""
     <div style="display:flex; justify-content:space-between; gap:10px; align-items:baseline;">
       <div>
-        <div class="muted">Today vs Expected</div>
+        <div style="font-size:13px; font-weight:900; color:#334155;">Today vs Expected</div>
         <div style="font-size:36px; font-weight:950; color:#0b1220; margin-top:4px;">
           {"-" if gap > 0 else "+"}{abs(gap):,.0f}
         </div>
         <div class="small-note">Expected: ${float(exp['revenue']):,.0f} • Actual: ${float(t['revenue']):,.0f}</div>
       </div>
       <div style="text-align:right;">
-        <div class="muted">Status</div>
+        <div style="font-size:13px; font-weight:900; color:#334155;">Status</div>
         <div style="font-size:22px; font-weight:950; color:{status_color}; margin-top:4px;">{status}</div>
-        <div style="font-size:12px; font-weight:900; color:{stat_flag_color}; margin-top:6px;">{stat_flag}</div>
         <div class="small-note">Gap: {gap_pct:+.1f}%</div>
+        <div class="small-note">{noise_label}</div>
       </div>
     </div>
     """
@@ -603,25 +562,41 @@ with s1:
 
 with s2:
     if gap > 0:
+        # Miss-only driver split (simple but correct story):
+        # Revenue ~ Impressions * eCPM / 1000
+        imp_b = float(exp["impressions"])
+        imp_t = float(t["impressions"])
+        ecpm_b = float(exp["ecpm"])
+        ecpm_t = float(t["ecpm"])
+
+        imp_effect = (imp_t - imp_b) * (ecpm_b / 1000.0)
+        ecpm_effect = imp_t * ((ecpm_t - ecpm_b) / 1000.0)
+        residual = (float(t["revenue"]) - float(exp["revenue"])) - (imp_effect + ecpm_effect)
+
+        loss_imp = max(-imp_effect, 0.0)
+        loss_ecpm = max(-ecpm_effect, 0.0)
+        loss_res = max(-residual, 0.0)
+        denom = (loss_imp + loss_ecpm + loss_res) if (loss_imp + loss_ecpm + loss_res) > 0 else 1.0
+
         inner = f"""
-        <div class="muted">Miss Split (loss-only)</div>
+        <div class="body-text">Miss Split (loss-only)</div>
         <div class="body-text" style="margin-top:10px;">
-          <div><b>Impressions:</b> {split['loss_imp_pct']:.0f}%</div>
-          <div><b>eCPM:</b> {split['loss_ecpm_pct']:.0f}%</div>
-          <div><b>Residual:</b> {split['loss_res_pct']:.0f}%</div>
+          <div><b>Impressions:</b> {loss_imp/denom*100:.0f}%</div>
+          <div><b>eCPM:</b> {loss_ecpm/denom*100:.0f}%</div>
+          <div><b>Residual:</b> {loss_res/denom*100:.0f}%</div>
         </div>
-        <div class="small-note">Only the portions that contributed to the revenue miss.</div>
+        <div class="small-note">Only portions contributing to the miss are shown (positive effects ignored).</div>
         """
     else:
-        inner = """
-        <div class="muted">No miss vs Expected</div>
-        <div class="body-text" style="margin-top:10px; color:#16a34a;">Revenue is at or above Expected baseline.</div>
+        inner = f"""
+        <div class="body-text" style="color:#16a34a;">Revenue is at/above Expected baseline.</div>
+        <div class="small-note">No miss to explain for this date.</div>
         """
     st.markdown(panel("Why Revenue Missed", inner), unsafe_allow_html=True)
 
 with s3:
     inner = f"""
-    <div class="muted">Pipeline Context</div>
+    <div class="body-text">Pipeline Context</div>
     <div class="body-text" style="margin-top:10px;">
       <div><b>PV/Session:</b> {t['pv_per_session']:.2f} (Δ {d['pv_per_session']:+.0f}%)</div>
       <div><b>Requests/PV:</b> {t['requests_per_page']:.2f} (Δ {d['requests_per_page']:+.0f}%)</div>
@@ -637,7 +612,7 @@ st.write("")
 # =========================
 # REVENUE BREAKDOWN CHART (Last 7 days)
 # =========================
-st.markdown(panel("Revenue Breakdown (Last 7 days)", "<div></div>"), unsafe_allow_html=True)
+st.markdown(panel("Revenue Breakdown (Last 7 days)", ""), unsafe_allow_html=True)
 
 last7 = daily[daily["date"] <= today].tail(7).copy()
 last7["dow"] = last7["date"].dt.day_name().str.slice(0, 3)
@@ -653,11 +628,10 @@ bars = base.mark_bar(opacity=0.9).encode(
         alt.Tooltip("date:T", title="Date"),
         alt.Tooltip("pageviews:Q", title="Pageviews", format=","),
         alt.Tooltip("requests_per_page:Q", title="Requests/PV", format=",.2f"),
-        alt.Tooltip("imp_per_page:Q", title="Imp/PV", format=",.2f"),
         alt.Tooltip("fill_rate:Q", title="Fill Rate %", format=",.1f"),
         alt.Tooltip("ecpm:Q", title="eCPM", format="$.2f"),
-        alt.Tooltip("rev_per_1k_sessions:Q", title="Rev/1K Sessions", format="$.2f"),
-        alt.Tooltip("rpu:Q", title="RPU", format="$.4f"),
+        alt.Tooltip("rpm:Q", title="RPM (Rev/1K Sessions)", format="$.2f"),
+        alt.Tooltip("rpu:Q", title="RPU (Rev/User)", format="$.4f"),
     ],
 )
 
@@ -676,22 +650,27 @@ line_ecpm = base.mark_line(point=True, strokeWidth=3).encode(
     color=alt.value("#7c3aed"),
 )
 
-chart = (
-    alt.layer(bars, line_rpp, line_fill, line_ecpm)
-    .resolve_scale(y="independent")
-    .properties(height=320)
-    .configure_view(stroke=None)
-    .configure_axis(labelColor="#334155", gridColor="#e5e7eb", tickColor="#cbd5e1")
-    .configure_legend(orient="top", title=None)
+chart = alt.layer(bars, line_rpp, line_fill, line_ecpm).resolve_scale(
+    y="independent"
+).properties(height=320).configure_view(
+    stroke=None
+).configure_axis(
+    labelColor="#334155",
+    gridColor="#e5e7eb",
+    tickColor="#cbd5e1",
+).configure_legend(
+    orient="top",
+    title=None
 )
 
 st.altair_chart(chart, use_container_width=True)
-st.caption("Expected = baseline median of totals. Deltas = Today vs Expected. Ratios are derived from totals (not summed).")
+
+st.caption("Expected = baseline median (totals). Delta = Today vs Expected. Ratios are derived from totals (not summed).")
 
 st.write("")
 
 # =========================
-# SANITY CHECKS
+# DATA SANITY CHECKS
 # =========================
 checks = []
 if t["sessions"] > 0 and t["pageviews"] == 0:
