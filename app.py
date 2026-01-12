@@ -1,20 +1,3 @@
-# app.py
-# Publisher Performance Dashboard (GA4 + GAM) — Professional + clean (PowerBI-like)
-#
-# ✅ Correct math:
-#   - Totals are summed per day
-#   - Ratios are derived from totals (never summed)
-#
-# ✅ Baseline (Expected):
-#   - Expected totals = median of last N days (excluding selected date)
-#   - Expected ratios are derived from expected totals
-#
-# ✅ Delta:
-#   - Delta % = (Today - Expected) / Expected * 100
-#
-# ✅ Z-score label:
-#   - “Noise-like movement” vs “Statistically abnormal” (text only)
-
 import streamlit as st
 import pandas as pd
 import numpy as np
@@ -33,7 +16,7 @@ st.markdown(
     """
 <style>
 .stApp { background: #f4f7fb; }
-.block-container { padding-top: 1.2rem; padding-bottom: 2rem; }
+.block-container { padding-top: 1.2rem; padding-bottom: 2rem; max-width: 1400px; }
 
 /* Header */
 .header{
@@ -53,7 +36,7 @@ st.markdown(
   border-radius: 12px;
   padding: 14px 16px;
   box-shadow: 0 6px 16px rgba(15,23,42,0.06);
-  overflow: hidden; /* ✅ prevents spill */
+  overflow: hidden;
 }
 .panel-title{
   font-size: 16px;
@@ -93,14 +76,45 @@ st.markdown(
   border-radius: 12px;
   padding: 12px 14px;
   box-shadow: 0 6px 16px rgba(15,23,42,0.06);
-  height: 98px;
-  min-width: 0; /* ✅ important inside grids */
+  height: 104px;
+  min-width: 0;
 }
-.mini-label{ font-size: 13px; font-weight: 800; color:#0f172a; opacity: 0.85;}
-.mini-row{ margin-top: 6px; display:flex; align-items: baseline; gap: 8px; min-width:0; }
-.mini-value{ font-size: 28px; font-weight: 950; color:#0b1220; line-height: 1.0; }
-.mini-delta{ font-size: 13px; font-weight: 950; white-space: nowrap; }
-.mini-bar{ height:6px; border-radius: 10px; margin-top: 10px; background:#e2e8f0; overflow:hidden; }
+.mini-label{
+  font-size: 12px;
+  font-weight: 900;
+  color:#334155;
+  line-height: 1.15;
+  white-space: normal;
+  word-break: break-word;
+  overflow-wrap:anywhere;
+}
+.mini-row{
+  margin-top: 6px;
+  display:flex;
+  align-items: baseline;
+  gap: 8px;
+  min-width:0;
+  flex-wrap: nowrap;
+}
+.mini-value{
+  font-size: 26px;
+  font-weight: 950;
+  color:#0b1220;
+  line-height: 1.0;
+  min-width:0;
+}
+.mini-delta{
+  font-size: 12px;
+  font-weight: 950;
+  white-space: nowrap;
+}
+.mini-bar{
+  height:6px;
+  border-radius: 10px;
+  margin-top: 10px;
+  background:#e2e8f0;
+  overflow:hidden;
+}
 .mini-bar > div{ height:100%; border-radius:10px; }
 
 /* Diagnosis strip + chips */
@@ -113,7 +127,7 @@ st.markdown(
   color:#0b1220;
 }
 
-/* ✅ FIXED CHIPS (NO OVERFLOW EVER) */
+/* ✅ FIXED CHIPS (NO OVERFLOW) */
 .chips{
   margin-top: 12px;
   display:flex;
@@ -131,12 +145,10 @@ st.markdown(
   border: 1px solid #e5e7eb;
   background:#f1f5f9;
   color:#0b1220;
-
-  /* hard overflow protection */
-  flex: 0 1 auto;     /* allow shrink */
-  min-width: 0;       /* critical in streamlit columns */
+  flex: 0 1 auto;
+  min-width: 0;
   max-width: 100%;
-  white-space: normal; /* allow wrap */
+  white-space: normal;
   word-break: break-word;
   overflow-wrap:anywhere;
   line-height: 1.15;
@@ -145,10 +157,21 @@ st.markdown(
 .chip-red{ background:#fee2e2; border-color:#ef4444; }
 .chip-amber{ background:#ffedd5; border-color:#f59e0b; }
 
-.small-note{ font-size: 12px; color:#475569; font-weight: 650; margin-top: 8px; }
-.body-text{ font-size: 13px; color:#0b1220; font-weight: 800; line-height: 1.55; }
+.small-note{ font-size: 12px; color:#475569; font-weight: 750; margin-top: 8px; }
+.body-text{ font-size: 13px; color:#0b1220; font-weight: 850; line-height: 1.55; }
 
 hr.soft { border:none; height:1px; background:#e7eef7; margin: 12px 0; }
+
+/* Prevent code-looking blocks inside panels */
+.panel code, .panel pre{
+  background: transparent !important;
+  color: inherit !important;
+  font-family: inherit !important;
+  font-size: inherit !important;
+  padding: 0 !important;
+  margin: 0 !important;
+  border: none !important;
+}
 </style>
 """,
     unsafe_allow_html=True,
@@ -191,11 +214,11 @@ def kpi_card(label, value_str, delta_pct):
     """
 
 def mini_card(label, value_str, delta_pct):
-    mag = min(abs(delta_pct) / 40.0, 1.0)
+    mag = min(abs(delta_pct) / 40.0, 1.0)  # 40% = full bar
     color = "#ef4444" if delta_pct < 0 else "#16a34a"
     sign = "▼" if delta_pct < 0 else "▲"
     if abs(delta_pct) < 1:
-        txt = "= 0%"
+        txt = "=0%"
         color_txt = "#0b1220"
         bar_color = "#94a3b8"
         mag = 0.35
@@ -223,9 +246,6 @@ def panel(title, inner_html):
     </div>
     """
 
-# =========================
-# Z-SCORE LABEL (TEXT ONLY)
-# =========================
 def zscore_label(value: float, baseline_series: pd.Series) -> str:
     s = pd.to_numeric(baseline_series, errors="coerce").dropna()
     if len(s) < 6:
@@ -233,7 +253,6 @@ def zscore_label(value: float, baseline_series: pd.Series) -> str:
     mu = float(s.mean())
     sd = float(s.std(ddof=0))
     if sd <= 1e-9:
-        # fallback to percent rule
         if mu == 0:
             return "Noise-like movement"
         p = safe_div(value - mu, mu, 100)
@@ -259,7 +278,7 @@ if not uploaded:
 
 df_raw = load_csv(uploaded)
 
-# Optional site selector
+# Site selector (optional)
 site = None
 if "site_name" in df_raw.columns:
     sites = sorted(df_raw["site_name"].dropna().unique().tolist())
@@ -285,17 +304,15 @@ daily["fill_rate"] = daily.apply(lambda r: safe_div(r["impressions"], r["ad_requ
 daily["requests_per_page"] = daily.apply(lambda r: safe_div(r["ad_requests"], r["pageviews"], 1), axis=1)
 daily["ctr"] = daily.apply(lambda r: safe_div(r["clicks"], r["impressions"], 100), axis=1)
 
-# Additional pipeline ratios
+# Pipeline ratios
 daily["pv_per_session"] = daily.apply(lambda r: safe_div(r["pageviews"], r["sessions"], 1), axis=1)
 daily["imp_per_page"] = daily.apply(lambda r: safe_div(r["impressions"], r["pageviews"], 1), axis=1)
 daily["imp_per_session"] = daily.apply(lambda r: safe_div(r["impressions"], r["sessions"], 1), axis=1)
 daily["clicks_per_session"] = daily.apply(lambda r: safe_div(r["clicks"], r["sessions"], 1), axis=1)
 
-# RPM + RPU definitions (as you asked)
-# RPM = revenue per session per 1000 sessions
-daily["rpm"] = daily.apply(lambda r: safe_div(r["revenue"], r["sessions"], 1000), axis=1)
-# RPU = revenue per user
-daily["rpu"] = daily.apply(lambda r: safe_div(r["revenue"], r["users"], 1), axis=1)
+# RPM + RPU (your definitions)
+daily["rpm"] = daily.apply(lambda r: safe_div(r["revenue"], r["sessions"], 1000), axis=1)  # Rev per 1K sessions
+daily["rpu"] = daily.apply(lambda r: safe_div(r["revenue"], r["users"], 1), axis=1)        # Rev per user
 
 # =========================
 # CONTROLS
@@ -334,7 +351,7 @@ else:
     exp_tot = baseline_df[base_cols].median(numeric_only=True).to_dict()
     exp = dict(exp_tot)
 
-    # derive expected ratios from expected totals
+    # expected ratios derived from expected totals
     exp["ecpm"] = safe_div(exp["revenue"], exp["impressions"], 1000)
     exp["fill_rate"] = safe_div(exp["impressions"], exp["ad_requests"], 100)
     exp["requests_per_page"] = safe_div(exp["ad_requests"], exp["pageviews"], 1)
@@ -382,7 +399,6 @@ st.write("")
 # TOP KPI ROW
 # =========================
 c1, c2, c3, c4 = st.columns([1, 1, 1, 1.35], gap="large")
-
 with c1:
     st.markdown(kpi_card("Revenue", f"${t['revenue']:,.0f}", d["revenue"]), unsafe_allow_html=True)
 with c2:
@@ -411,7 +427,7 @@ with c4:
 st.write("")
 
 # =========================
-# INSIGHT ENGINE (pipeline based)
+# PIPELINE DIAGNOSIS
 # =========================
 def pipeline_diagnosis(t, exp):
     chips = []
@@ -420,6 +436,8 @@ def pipeline_diagnosis(t, exp):
     gap = float(exp["revenue"]) - float(t["revenue"])
     if gap > 0:
         story.append(f"Today missed expected revenue by ${gap:,.0f} (Expected baseline median).")
+    else:
+        story.append("Revenue is at/above Expected baseline for this day.")
 
     users_down = exp["users"] > 0 and t["users"] <= exp["users"] * 0.90
     sessions_down = exp["sessions"] > 0 and t["sessions"] <= exp["sessions"] * 0.90
@@ -428,22 +446,20 @@ def pipeline_diagnosis(t, exp):
     imp_pv_down = exp["imp_per_page"] > 0 and t["imp_per_page"] <= exp["imp_per_page"] * 0.90
     ecpm_down = exp["ecpm"] > 0 and t["ecpm"] <= exp["ecpm"] * 0.90
 
-    # Traffic/Engagement first
     if users_down or sessions_down:
         issue = "Traffic Problem"
         if users_down: chips.append(("Users Down", "red"))
         if sessions_down: chips.append(("Sessions Down", "red"))
-        story.append("Traffic dropped → fewer sessions/pageviews → fewer ad opportunities.")
+        story.append("Traffic dropped → fewer sessions and pageviews → fewer ad opportunities.")
         return issue, chips, story
 
     if pvps_down:
         issue = "Engagement Problem"
         chips.append(("PV/Session Down", "red"))
-        chips.append(("Fewer pages viewed", "amber"))
+        chips.append(("Fewer pages per visit", "amber"))
         story.append("Users are visiting fewer pages per session → fewer ad slots exposed per visit.")
         return issue, chips, story
 
-    # Setup / tag
     if rpp_down:
         issue = "Tag / Ad-call Problem"
         chips.append(("Requests/PV Down", "red"))
@@ -451,7 +467,6 @@ def pipeline_diagnosis(t, exp):
         story.append("Pageviews are present but ad requests per pageview dropped → missing ad calls (tag/template/lazyload/CMP/adblock).")
         return issue, chips, story
 
-    # Demand/fill
     if imp_pv_down:
         issue = "Demand / Fill Problem"
         chips.append(("Imp/PV Down", "red"))
@@ -459,7 +474,6 @@ def pipeline_diagnosis(t, exp):
         story.append("Requests exist but impressions per page dropped → fill/demand/floors/blocks/policy/buyer loss.")
         return issue, chips, story
 
-    # Pricing
     if ecpm_down:
         issue = "Pricing / eCPM Problem"
         chips.append(("eCPM Down", "red"))
@@ -469,13 +483,13 @@ def pipeline_diagnosis(t, exp):
 
     issue = "Normal / Mixed"
     chips.append(("No major break", "green"))
-    story.append("Pipeline looks stable vs baseline. Investigate segments if revenue still fluctuates (geo/device/ad units).")
+    story.append("Pipeline looks stable vs baseline. Segment by geo/device/ad units if needed.")
     return issue, chips, story
 
 issue_title, chips, story_lines = pipeline_diagnosis(t, exp)
 
 # =========================
-# MIDDLE ROW
+# MIDDLE ROW (Diagnosis + Key Metrics)
 # =========================
 left, right = st.columns([1.2, 1.6], gap="large")
 
@@ -503,19 +517,15 @@ with left:
     st.markdown(panel("Diagnosis", inner), unsafe_allow_html=True)
 
 with right:
+    # ✅ FIX: use 4 columns grid so it never overlaps on small widths
     inner = f"""
-    <div style="display:grid; grid-template-columns: repeat(6, 1fr); gap: 14px;">
+    <div style="display:grid; grid-template-columns: repeat(4, 1fr); gap: 14px;">
       {mini_card("Users", fmt_compact(t["users"]), d["users"])}
       {mini_card("Sessions", fmt_compact(t["sessions"]), d["sessions"])}
       {mini_card("Pageviews", fmt_compact(t["pageviews"]), d["pageviews"])}
       {mini_card("Ad Requests", fmt_compact(t["ad_requests"]), d["ad_requests"])}
       {mini_card("RPM (Rev/1K Sessions)", f"${t['rpm']:.2f}", d["rpm"])}
       {mini_card("RPU (Rev/User)", f"${t['rpu']:.2f}", d["rpu"])}
-    </div>
-
-    <div style="height:10px;"></div>
-
-    <div style="display:grid; grid-template-columns: repeat(6, 1fr); gap: 14px;">
       {mini_card("PV / Session", f"{t['pv_per_session']:.2f}", d["pv_per_session"])}
       {mini_card("Requests / PV", f"{t['requests_per_page']:.2f}", d["requests_per_page"])}
       {mini_card("Imp / PV", f"{t['imp_per_page']:.2f}", d["imp_per_page"])}
@@ -523,7 +533,6 @@ with right:
       {mini_card("Clicks", fmt_compact(t["clicks"]), d["clicks"])}
       {mini_card("Clicks / Session", f"{t['clicks_per_session']:.4f}", d["clicks_per_session"])}
     </div>
-
     <div class="small-note">All deltas are vs <b>Expected baseline median</b> (totals median; ratios derived from totals).</div>
     """
     st.markdown(panel("Key Metrics Overview", inner), unsafe_allow_html=True)
@@ -561,9 +570,8 @@ with s1:
     st.markdown(panel("Loss Meter", inner), unsafe_allow_html=True)
 
 with s2:
+    # ✅ FIX: pure HTML (no backticks) so it never prints raw code
     if gap > 0:
-        # Miss-only driver split (simple but correct story):
-        # Revenue ~ Impressions * eCPM / 1000
         imp_b = float(exp["impressions"])
         imp_t = float(t["impressions"])
         ecpm_b = float(exp["ecpm"])
@@ -580,16 +588,16 @@ with s2:
 
         inner = f"""
         <div class="body-text">Miss Split (loss-only)</div>
-        <div class="body-text" style="margin-top:10px;">
+        <div style="margin-top:10px; font-size:13px; font-weight:850; color:#0b1220; line-height:1.6;">
           <div><b>Impressions:</b> {loss_imp/denom*100:.0f}%</div>
           <div><b>eCPM:</b> {loss_ecpm/denom*100:.0f}%</div>
           <div><b>Residual:</b> {loss_res/denom*100:.0f}%</div>
         </div>
-        <div class="small-note">Only portions contributing to the miss are shown (positive effects ignored).</div>
+        <div class="small-note">Only the portions that contributed to the revenue miss.</div>
         """
     else:
-        inner = f"""
-        <div class="body-text" style="color:#16a34a;">Revenue is at/above Expected baseline.</div>
+        inner = """
+        <div style="font-size:13px; font-weight:900; color:#16a34a;">Revenue is at/above Expected baseline.</div>
         <div class="small-note">No miss to explain for this date.</div>
         """
     st.markdown(panel("Why Revenue Missed", inner), unsafe_allow_html=True)
@@ -597,7 +605,7 @@ with s2:
 with s3:
     inner = f"""
     <div class="body-text">Pipeline Context</div>
-    <div class="body-text" style="margin-top:10px;">
+    <div style="margin-top:10px; font-size:13px; font-weight:850; color:#0b1220; line-height:1.7;">
       <div><b>PV/Session:</b> {t['pv_per_session']:.2f} (Δ {d['pv_per_session']:+.0f}%)</div>
       <div><b>Requests/PV:</b> {t['requests_per_page']:.2f} (Δ {d['requests_per_page']:+.0f}%)</div>
       <div><b>Imp/PV:</b> {t['imp_per_page']:.2f} (Δ {d['imp_per_page']:+.0f}%)</div>
@@ -639,12 +647,10 @@ line_rpp = base.mark_line(point=True, strokeWidth=3).encode(
     y=alt.Y("requests_per_page:Q", title=None),
     color=alt.value("#f59e0b"),
 )
-
 line_fill = base.mark_line(point=True, strokeWidth=3).encode(
     y=alt.Y("fill_rate:Q", title=None),
     color=alt.value("#22c55e"),
 )
-
 line_ecpm = base.mark_line(point=True, strokeWidth=3).encode(
     y=alt.Y("ecpm:Q", title=None),
     color=alt.value("#7c3aed"),
@@ -664,8 +670,7 @@ chart = alt.layer(bars, line_rpp, line_fill, line_ecpm).resolve_scale(
 )
 
 st.altair_chart(chart, use_container_width=True)
-
-st.caption("Expected = baseline median (totals). Delta = Today vs Expected. Ratios are derived from totals (not summed).")
+st.caption("Expected = baseline median (totals). Delta = Today vs Expected. Ratios derived from totals (not summed).")
 
 st.write("")
 
