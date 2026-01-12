@@ -1,4 +1,4 @@
-````python
+
 # app.py
 # Publisher Performance Dashboard (GA4 + GAM) — clean PowerBI-like
 #
@@ -730,4 +730,4 @@ if checks:
     st.markdown(panel("Sanity Checks", "<br/>".join([f"• {c}" for c in checks])), unsafe_allow_html=True)
 else:
     st.markdown(panel("Sanity Checks", "<span class='small-note'>No obvious integrity red flags for selected day.</span>"), unsafe_allow_html=True)
-````
+
