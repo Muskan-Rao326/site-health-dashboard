@@ -1,24 +1,6 @@
 # app.py
-# Publisher Performance Dashboard (GA4 + GAM) — Professional + clean (PowerBI-like)
-# Layout matches your reference image (excluding the bottom landing pages + ad unit panels)
-#
-# ✅ 100% correct metric math:
-#   - ONLY additive totals are SUMmed per day (users, sessions, pageviews, ad_requests, impressions, clicks, revenue)
-#   - ALL ratios are derived from totals (never summed): eCPM, Fill Rate, Requests/Page, CTR, RPM, etc.
-#
-# ✅ One story reference everywhere:
-#   - Expected = baseline median (last N days, excluding selected date)
-#   - All “delta %” in KPI tiles are vs Expected (baseline median) to match the image
-#
-# ✅ Better insights + logic:
-#   - “Leakage pipeline” diagnosis: Pageviews → Requests/Page → Fill → Impressions → eCPM → Revenue
-#   - Root-cause decomposition (Revenue loss split into Impressions vs eCPM, and Impressions split into Requests vs Fill)
-#   - Today vs Expected loss meter + confidence score (residual ratio)
-#   - Data sanity checks (merge lag, missing rows, zeros)
-#
-# ✅ Clean, professional UI:
-#   - Header bar, consistent tiles, minimal colors, crisp typography
-#   - Charts aligned and labeled like a reporting dashboard
+# Publisher Performance Dashboard (GA4 + GAM)
+# Clean UI + Full pipeline detection (Users → Sessions → Pageviews → Requests → Impressions → Revenue)
 
 import streamlit as st
 import pandas as pd
@@ -43,19 +25,19 @@ st.markdown(
 /* Header */
 .header{
   background: linear-gradient(90deg, #183a63, #244f7c);
-  border-radius: 12px;
+  border-radius: 14px;
   padding: 18px 22px;
   color: #fff;
   box-shadow: 0 10px 22px rgba(15,23,42,0.20);
 }
 .header-title{ font-size: 28px; font-weight: 900; line-height: 1.15; }
-.header-sub{ margin-top: 4px; font-size: 13px; opacity: 0.85; font-weight: 600; }
+.header-sub{ margin-top: 4px; font-size: 13px; opacity: 0.85; font-weight: 650; }
 
 /* Panels */
 .panel{
   background: #ffffff;
   border: 1px solid #e7eef7;
-  border-radius: 12px;
+  border-radius: 14px;
   padding: 14px 16px;
   box-shadow: 0 6px 16px rgba(15,23,42,0.06);
 }
@@ -70,18 +52,19 @@ st.markdown(
 .kpi-card{
   background:#ffffff;
   border: 1px solid #e7eef7;
-  border-radius: 12px;
+  border-radius: 14px;
   padding: 14px 16px;
   box-shadow: 0 6px 16px rgba(15,23,42,0.06);
-  height: 120px;
+  height: 116px;
+  overflow:hidden;
 }
-.kpi-label{ font-size: 14px; font-weight: 800; color:#0f172a; opacity: 0.85; }
-.kpi-value{ margin-top: 6px; font-size: 40px; font-weight: 950; color:#0b1220; line-height: 1.05; }
+.kpi-label{ font-size: 14px; font-weight: 850; color:#0f172a; opacity: 0.85; }
+.kpi-value{ margin-top: 6px; font-size: 38px; font-weight: 950; color:#0b1220; line-height: 1.05; }
 .kpi-delta{
   margin-top: 10px;
   display:inline-block;
   padding: 6px 12px;
-  border-radius: 8px;
+  border-radius: 10px;
   font-size: 13px;
   font-weight: 900;
   color: #fff;
@@ -91,34 +74,35 @@ st.markdown(
 .badge-gray{ background:#64748b; }
 
 /* Mini KPI */
+.mini-grid{ display:grid; grid-template-columns: repeat(4, 1fr); gap: 14px; }
 .mini-card{
   background:#ffffff;
   border: 1px solid #e7eef7;
-  border-radius: 12px;
+  border-radius: 14px;
   padding: 12px 14px;
   box-shadow: 0 6px 16px rgba(15,23,42,0.06);
-  height: 98px;
+  height: 96px;
 }
-.mini-label{ font-size: 13px; font-weight: 800; color:#0f172a; opacity: 0.85;}
-.mini-row{ margin-top: 6px; display:flex; align-items: baseline; gap: 8px; }
-.mini-value{ font-size: 28px; font-weight: 950; color:#0b1220; line-height: 1.0; }
+.mini-label{ font-size: 13px; font-weight: 850; color:#0f172a; opacity: 0.85;}
+.mini-row{ margin-top: 6px; display:flex; align-items: baseline; justify-content:space-between; gap: 8px; }
+.mini-value{ font-size: 26px; font-weight: 950; color:#0b1220; line-height: 1.0; }
 .mini-delta{ font-size: 13px; font-weight: 950; }
 .mini-bar{ height:6px; border-radius: 10px; margin-top: 10px; background:#e2e8f0; overflow:hidden; }
 .mini-bar > div{ height:100%; border-radius:10px; }
 
-/* Diagnosis strip + chips */
+/* Diagnosis */
 .diag-strip{
-  background: #f6d9c9;
+  background: #fde9dd;
   border-left: 6px solid #ef4444;
   padding: 10px 12px;
-  border-radius: 10px;
+  border-radius: 12px;
   font-weight: 950;
   color:#0b1220;
 }
 .chips{ margin-top: 12px; display:flex; gap:10px; flex-wrap:wrap; }
 .chip{
   padding: 8px 12px;
-  border-radius: 10px;
+  border-radius: 12px;
   font-weight: 900;
   font-size: 12px;
   border: 1px solid #e5e7eb;
@@ -128,9 +112,7 @@ st.markdown(
 .chip-green{ background:#dcfce7; border-color:#22c55e; }
 .chip-red{ background:#fee2e2; border-color:#ef4444; }
 .chip-amber{ background:#ffedd5; border-color:#f59e0b; }
-
 .small-note{ font-size: 12px; color:#475569; font-weight: 650; margin-top: 8px; }
-
 hr.soft { border:none; height:1px; background:#e7eef7; margin: 12px 0; }
 </style>
 """,
@@ -138,7 +120,7 @@ hr.soft { border:none; height:1px; background:#e7eef7; margin: 12px 0; }
 )
 
 # =========================
-# HELPERS (correct math)
+# HELPERS
 # =========================
 def safe_div(n, d, mult=1.0):
     return (n / d) * mult if d and d != 0 else 0.0
@@ -159,7 +141,6 @@ def fmt_compact(x):
     return f"{sign}{x:.0f}"
 
 def badge_class(delta_pct):
-    # for top KPIs, your screenshot shows red even for mild drops, green for up
     if np.isnan(delta_pct):
         return "badge-gray"
     return "badge-red" if delta_pct < 0 else "badge-green"
@@ -175,8 +156,7 @@ def kpi_card(label, value_str, delta_pct):
     """
 
 def mini_card(label, value_str, delta_pct):
-    # bar fill uses magnitude (capped)
-    mag = min(abs(delta_pct) / 40.0, 1.0)  # 40% drop = full bar
+    mag = min(abs(delta_pct) / 40.0, 1.0)
     color = "#ef4444" if delta_pct < 0 else "#16a34a"
     sign = "▼" if delta_pct < 0 else "▲"
     if abs(delta_pct) < 1:
@@ -226,14 +206,14 @@ if not uploaded:
 
 df_raw = load_csv(uploaded)
 
-# Site selector (if present)
+# Site selector (optional)
 site = None
 if "site_name" in df_raw.columns:
     sites = sorted(df_raw["site_name"].dropna().unique().tolist())
     site = st.sidebar.selectbox("Site", sites, index=0)
     df_raw = df_raw[df_raw["site_name"] == site].copy()
 
-# Required totals (GA4 + GAM)
+# Required totals
 base_cols = ["users", "sessions", "pageviews", "ad_requests", "impressions", "clicks", "revenue"]
 missing = [c for c in base_cols if c not in df_raw.columns]
 if missing:
@@ -243,13 +223,15 @@ if missing:
 for c in base_cols:
     df_raw[c] = pd.to_numeric(df_raw[c], errors="coerce").fillna(0.0)
 
-# Daily totals (ONLY totals are summed)
+# Daily totals
 daily = df_raw.groupby("date", as_index=False)[base_cols].sum().sort_values("date")
 
-# Derived ratios (NEVER SUM these)
+# Derived ratios (derived from totals ONLY)
 daily["ecpm"] = daily.apply(lambda r: safe_div(r["revenue"], r["impressions"], 1000), axis=1)
 daily["fill_rate"] = daily.apply(lambda r: safe_div(r["impressions"], r["ad_requests"], 100), axis=1)
 daily["requests_per_page"] = daily.apply(lambda r: safe_div(r["ad_requests"], r["pageviews"], 1), axis=1)
+daily["pageviews_per_session"] = daily.apply(lambda r: safe_div(r["pageviews"], r["sessions"], 1), axis=1)
+daily["sessions_per_user"] = daily.apply(lambda r: safe_div(r["sessions"], r["users"], 1), axis=1)
 daily["ctr"] = daily.apply(lambda r: safe_div(r["clicks"], r["impressions"], 100), axis=1)
 daily["rpm"] = daily.apply(lambda r: safe_div(r["revenue"], r["pageviews"], 1000), axis=1)
 
@@ -274,27 +256,30 @@ if today_df.empty:
     st.stop()
 
 t = today_df.iloc[0].to_dict()
-
 baseline_df = daily[(daily["date"] < today) & (daily["date"] >= baseline_start)]
-display_df = daily[(daily["date"] >= baseline_start - timedelta(days=6)) & (daily["date"] <= today)].copy()
 
-# Expected = baseline median totals
+# Expected baseline = median of totals
 if baseline_df.empty:
     exp = {c: 0.0 for c in base_cols}
-    exp.update({"ecpm": 0.0, "fill_rate": 0.0, "requests_per_page": 0.0, "ctr": 0.0, "rpm": 0.0})
 else:
-    exp_tot = baseline_df[base_cols].median(numeric_only=True).to_dict()
-    exp = dict(exp_tot)
-    exp["ecpm"] = safe_div(exp["revenue"], exp["impressions"], 1000)
-    exp["fill_rate"] = safe_div(exp["impressions"], exp["ad_requests"], 100)
-    exp["requests_per_page"] = safe_div(exp["ad_requests"], exp["pageviews"], 1)
-    exp["ctr"] = safe_div(exp["clicks"], exp["impressions"], 100)
-    exp["rpm"] = safe_div(exp["revenue"], exp["pageviews"], 1000)
+    exp = baseline_df[base_cols].median(numeric_only=True).to_dict()
 
-# Deltas vs expected (this is what your image is showing)
-d = {}
-for k in ["revenue", "ecpm", "fill_rate", "requests_per_page", "users", "sessions", "pageviews", "ad_requests", "impressions", "rpm", "ctr"]:
-    d[k] = pct_change(t.get(k, 0.0), exp.get(k, 0.0))
+# expected ratios derived from expected totals
+exp["ecpm"] = safe_div(exp["revenue"], exp["impressions"], 1000)
+exp["fill_rate"] = safe_div(exp["impressions"], exp["ad_requests"], 100)
+exp["requests_per_page"] = safe_div(exp["ad_requests"], exp["pageviews"], 1)
+exp["pageviews_per_session"] = safe_div(exp["pageviews"], exp["sessions"], 1)
+exp["sessions_per_user"] = safe_div(exp["sessions"], exp["users"], 1)
+exp["ctr"] = safe_div(exp["clicks"], exp["impressions"], 100)
+exp["rpm"] = safe_div(exp["revenue"], exp["pageviews"], 1000)
+
+# deltas vs expected
+metrics_for_deltas = [
+    "revenue","ecpm","fill_rate","requests_per_page",
+    "users","sessions","pageviews","ad_requests","impressions",
+    "pageviews_per_session","sessions_per_user","rpm","ctr"
+]
+d = {k: pct_change(t.get(k,0.0), exp.get(k,0.0)) for k in metrics_for_deltas}
 
 # =========================
 # HEADER
@@ -312,10 +297,9 @@ st.markdown(
 st.write("")
 
 # =========================
-# TOP KPI ROW (match image)
+# TOP KPIs (clean & consistent)
 # =========================
-c1, c2, c3, c4 = st.columns([1, 1, 1, 1.35], gap="large")
-
+c1, c2, c3, c4 = st.columns([1, 1, 1, 1], gap="large")
 with c1:
     st.markdown(kpi_card("Revenue", f"${t['revenue']:,.0f}", d["revenue"]), unsafe_allow_html=True)
 with c2:
@@ -323,161 +307,103 @@ with c2:
 with c3:
     st.markdown(kpi_card("Fill Rate", f"{t['fill_rate']:.0f}%", d["fill_rate"]), unsafe_allow_html=True)
 with c4:
-    # Requests/Page with split feel
-    st.markdown(
-        f"""
-        <div class="kpi-card" style="height:120px;">
-          <div class="kpi-label">Requests Per Page</div>
-          <div style="display:flex; align-items:center; justify-content:space-between; gap:14px; margin-top:6px;">
-            <div class="kpi-value" style="font-size:38px;">{t['requests_per_page']:.1f}</div>
-            <div style="width:1px; height:54px; background:#e5e7eb;"></div>
-            <div style="text-align:center;">
-              <div class="kpi-value" style="font-size:34px;">{d['requests_per_page']:+.0f}%</div>
-              <div style="height:6px; background:#ef4444; border-radius:10px; margin-top:8px;"></div>
-            </div>
-          </div>
-          <span class="kpi-delta {badge_class(d['requests_per_page'])}">{d['requests_per_page']:+.0f}%</span>
-        </div>
-        """,
-        unsafe_allow_html=True,
-    )
+    st.markdown(kpi_card("Requests / Page", f"{t['requests_per_page']:.2f}", d["requests_per_page"]), unsafe_allow_html=True)
 
 st.write("")
 
 # =========================
-# INSIGHT ENGINE (clean + accurate)
+# PIPELINE (GA → GAM) + BOTTLENECK DETECTION
 # =========================
-def root_cause_story(t, exp):
+def pipeline_table(t, exp):
     """
-    Outputs:
-      issue_title
-      chips (label, type)
-      story_lines (short bullets)
-      loss_split dict
-      confidence (High/Med/Low) based on residual ratio
-    Uses ONLY Expected baseline median as story reference.
+    Full funnel with ratios:
+      Users -> Sessions -> Pageviews -> Ad Requests -> Impressions -> Revenue
+    And the key "rate steps" in between:
+      Sessions/User, Pageviews/Session, Requests/Pageview, Fill (Imp/Req), eCPM (Rev/Imp*1000)
+    Bottleneck = the step with largest negative % change vs expected.
     """
-    # Shortcuts
-    rev_t, rev_b = float(t["revenue"]), float(exp["revenue"])
-    imp_t, imp_b = float(t["impressions"]), float(exp["impressions"])
-    req_t, req_b = float(t["ad_requests"]), float(exp["ad_requests"])
+    rows = []
 
-    ecpm_t = safe_div(rev_t, imp_t, 1000)
-    ecpm_b = safe_div(rev_b, imp_b, 1000)
+    # absolute stages
+    rows += [
+        ("Users", t["users"], exp["users"], "GA"),
+        ("Sessions", t["sessions"], exp["sessions"], "GA"),
+        ("Pageviews", t["pageviews"], exp["pageviews"], "GA"),
+        ("Ad Requests", t["ad_requests"], exp["ad_requests"], "GAM"),
+        ("Impressions", t["impressions"], exp["impressions"], "GAM"),
+        ("Revenue", t["revenue"], exp["revenue"], "GAM"),
+    ]
 
-    fill_t = safe_div(imp_t, req_t, 100) if req_t else 0.0
-    fill_b = safe_div(imp_b, req_b, 100) if req_b else 0.0
+    # rate steps (these are the “where it broke” levers)
+    steps = [
+        ("Sessions / User", safe_div(t["sessions"], t["users"], 1), safe_div(exp["sessions"], exp["users"], 1), "Engagement"),
+        ("Pageviews / Session", safe_div(t["pageviews"], t["sessions"], 1), safe_div(exp["pageviews"], exp["sessions"], 1), "Engagement"),
+        ("Requests / Pageview", safe_div(t["ad_requests"], t["pageviews"], 1), safe_div(exp["ad_requests"], exp["pageviews"], 1), "Setup"),
+        ("Fill Rate (Imp/Req)", safe_div(t["impressions"], t["ad_requests"], 100), safe_div(exp["impressions"], exp["ad_requests"], 100), "Demand"),
+        ("eCPM (Rev/Imp)", safe_div(t["revenue"], t["impressions"], 1000), safe_div(exp["revenue"], exp["impressions"], 1000), "Pricing"),
+    ]
 
-    rpp_t = safe_div(req_t, float(t["pageviews"]), 1) if float(t["pageviews"]) else 0.0
-    rpp_b = safe_div(req_b, float(exp["pageviews"]), 1) if float(exp["pageviews"]) else 0.0
+    df_abs = pd.DataFrame(rows, columns=["Stage", "Today", "Expected", "Source"])
+    df_abs["Delta %"] = df_abs.apply(lambda r: pct_change(r["Today"], r["Expected"]), axis=1)
 
-    # Revenue decomposition: Rev = Imp * eCPM / 1000
-    d_rev = rev_t - rev_b
-    imp_effect = (imp_t - imp_b) * (ecpm_b / 1000)
-    ecpm_effect = imp_t * ((ecpm_t - ecpm_b) / 1000)
-    residual = d_rev - (imp_effect + ecpm_effect)
+    df_steps = pd.DataFrame(steps, columns=["Stage", "Today", "Expected", "Source"])
+    df_steps["Delta %"] = df_steps.apply(lambda r: pct_change(r["Today"], r["Expected"]), axis=1)
 
-    # Impressions decomposition: Imp = Req * Fill/100
-    d_imp = imp_t - imp_b
-    req_effect = (req_t - req_b) * (fill_b / 100)
-    fill_effect = req_t * ((fill_t - fill_b) / 100)
-    imp_residual = d_imp - (req_effect + fill_effect)
+    # Bottleneck detection on step rates (this is usually the most actionable)
+    bottleneck_row = df_steps.sort_values("Delta %").iloc[0] if len(df_steps) else None
+    return df_abs, df_steps, bottleneck_row
 
-    # Confidence from residual ratio
-    denom = abs(d_rev) if abs(d_rev) > 1e-9 else max(abs(rev_b), 1.0)
-    residual_ratio = abs(residual) / denom
-    if residual_ratio <= 0.10:
-        conf = "High"
-    elif residual_ratio <= 0.25:
-        conf = "Medium"
-    else:
-        conf = "Low"
+df_abs, df_steps, bottleneck = pipeline_table(t, exp)
 
-    # Loss split (only when revenue missed expected)
-    gap = rev_b - rev_t  # positive means loss
-    loss_imp = max(-imp_effect, 0.0)
-    loss_ecpm = max(-ecpm_effect, 0.0)
-    loss_res = max(-residual, 0.0)
-    denom_loss = (loss_imp + loss_ecpm + loss_res) if (loss_imp + loss_ecpm + loss_res) > 0 else 1.0
+# Explain revenue gap using multiplicative factors:
+# Revenue ratio approx = (Users ratio) * (Sessions/User ratio) * (PV/Session ratio) * (Req/PV ratio) * (Fill ratio) * (eCPM ratio)
+def revenue_factor_breakdown(t, exp):
+    def ratio(a, b): return (a / b) if b and b != 0 else 0.0
+    factors = [
+        ("Users", ratio(t["users"], exp["users"])),
+        ("Sessions/User", ratio(safe_div(t["sessions"], t["users"], 1), safe_div(exp["sessions"], exp["users"], 1))),
+        ("PV/Session", ratio(safe_div(t["pageviews"], t["sessions"], 1), safe_div(exp["pageviews"], exp["sessions"], 1))),
+        ("Req/PV", ratio(safe_div(t["ad_requests"], t["pageviews"], 1), safe_div(exp["ad_requests"], exp["pageviews"], 1))),
+        ("Fill", ratio(safe_div(t["impressions"], t["ad_requests"], 1), safe_div(exp["impressions"], exp["ad_requests"], 1))),
+        ("eCPM", ratio(safe_div(t["revenue"], t["impressions"], 1), safe_div(exp["revenue"], exp["impressions"], 1))),
+    ]
+    # compute contribution score (log space for fair additive contributions)
+    # negative contributions = drivers of decline
+    contrib = []
+    for name, r in factors:
+        r = max(r, 1e-9)
+        contrib.append((name, np.log(r)))
+    dfc = pd.DataFrame(contrib, columns=["Driver", "LogContribution"])
+    dfc["Impact Share %"] = (dfc["LogContribution"].abs() / dfc["LogContribution"].abs().sum() * 100.0).replace([np.inf, -np.inf], 0).fillna(0)
+    dfc["Direction"] = np.where(dfc["LogContribution"] < 0, "Down", "Up")
+    return dfc.sort_values("LogContribution")
 
-    split = {
-        "gap": gap,
-        "loss_imp_pct": loss_imp / denom_loss * 100,
-        "loss_ecpm_pct": loss_ecpm / denom_loss * 100,
-        "loss_res_pct": loss_res / denom_loss * 100,
-        "imp_effect": imp_effect,
-        "ecpm_effect": ecpm_effect,
-        "residual": residual,
-        "req_effect": req_effect,
-        "fill_effect": fill_effect,
-        "imp_residual": imp_residual,
-        "residual_ratio": residual_ratio,
-        "conf": conf,
-        "fill_t": fill_t,
-        "fill_b": fill_b,
-        "rpp_t": rpp_t,
-        "rpp_b": rpp_b,
-        "ecpm_t": ecpm_t,
-        "ecpm_b": ecpm_b,
-    }
+df_contrib = revenue_factor_breakdown(t, exp)
 
-    # Diagnosis (leakage pipeline)
-    pv_t, pv_b = float(t["pageviews"]), float(exp["pageviews"])
-    pv_stable = pv_b > 0 and pv_t >= pv_b * 0.95
-    rpp_down = rpp_b > 0 and rpp_t <= rpp_b * 0.90
-
-    req_down = req_b > 0 and req_t <= req_b * 0.90
-    fill_down = fill_b > 0 and fill_t <= fill_b * 0.90
-    ecpm_down = ecpm_b > 0 and ecpm_t <= ecpm_b * 0.90
-
-    users_down = float(exp["users"]) > 0 and float(t["users"]) <= float(exp["users"]) * 0.90
-
+# Diagnosis label based on worst step
+def diagnosis_from_bottleneck(b):
+    if b is None:
+        return "Mixed Movement", [("Check Data", "amber")]
+    step = str(b["Stage"])
+    delta = float(b["Delta %"])
     chips = []
-    story = []
+    if "Req" in step:
+        return "Setup Problem", [("Requests/Pageview Down", "red"), ("Tag/Slot/CMP risk", "amber")]
+    if "Fill" in step:
+        return "Demand / Fill Problem", [("Fill Down", "red"), ("Floors/Blocks/Buyer loss", "amber")]
+    if "eCPM" in step:
+        return "Pricing / eCPM Problem", [("eCPM Down", "red"), ("Geo/Device mix", "amber")]
+    if "PV/Session" in step or "Sessions / User" in step:
+        return "Engagement Problem", [("PV/Session Down", "red"), ("Content/UX shift", "amber")]
+    # fallback
+    if delta < 0:
+        return "Pipeline Degradation", [("Multiple Steps Down", "amber")]
+    return "Normal", [("Pipeline Healthy", "green")]
 
-    if gap > 0:
-        story.append(f"Today missed expected revenue by ${gap:,.0f} (Expected baseline median).")
-        story.append(f"Loss split: {split['loss_imp_pct']:.0f}% Impressions, {split['loss_ecpm_pct']:.0f}% eCPM, {split['loss_res_pct']:.0f}% residual.")
-
-    # Priority diagnosis: setup leak first (PV ok but Requests/Page down)
-    if pv_stable and rpp_down:
-        issue = "Setup Problem"
-        chips = [("Tag Issue", "green"), ("Ad Density Drop", "neutral"), ("Requests/Page Down", "red")]
-        story.append("Pageviews are stable but Requests/Page dropped → ad calls are missing per pageview (tag/CMP/adblock/template).")
-        return issue, chips, story, split
-
-    # Traffic issue
-    if users_down and (pv_b > 0 and pv_t <= pv_b * 0.90):
-        issue = "Traffic Problem"
-        chips = [("Users Down", "red"), ("Pageviews Down", "red")]
-        story.append("Traffic is down → fewer pageviews → fewer ad opportunities.")
-        return issue, chips, story, split
-
-    # Fill issue (requests exist but fill down)
-    if (not req_down) and fill_down:
-        issue = "Demand / Fill Problem"
-        chips = [("Fill Rate Down", "red"), ("Requests OK", "green")]
-        story.append("Requests are present but fill dropped → demand/floors/blocks/policy/buyer loss.")
-        return issue, chips, story, split
-
-    # eCPM issue (impressions stable but ecpm down)
-    imp_stable = imp_b > 0 and imp_t >= imp_b * 0.95
-    if imp_stable and ecpm_down:
-        issue = "Pricing / eCPM Problem"
-        chips = [("eCPM Down", "red"), ("Impressions OK", "green")]
-        story.append("Impressions are stable but eCPM dropped → buyers paid less per 1,000 impressions (mix or demand quality).")
-        return issue, chips, story, split
-
-    issue = "Mixed Movement"
-    chips = [("Check Segments", "neutral")]
-    if gap > 0 and split["conf"] == "Low":
-        story.append("Residual is high → this day may have reporting lag / merge mismatch. Treat as directional.")
-    return issue, chips, story, split
-
-issue_title, chips, story_lines, split = root_cause_story(t, exp)
+issue_title, chips = diagnosis_from_bottleneck(bottleneck)
 
 # =========================
-# MIDDLE ROW (Diagnosis + Key Metrics Overview)
+# MIDDLE ROW: Diagnosis + Key Metrics Overview
 # =========================
 left, right = st.columns([1.2, 1.6], gap="large")
 
@@ -493,25 +419,26 @@ with left:
             cls = "chip chip-amber"
         chips_html += f'<div class="{cls}">{label}</div>'
 
-    conf = split["conf"]
-    conf_color = "#16a34a" if conf == "High" else "#f59e0b" if conf == "Medium" else "#ef4444"
+    bn_txt = ""
+    if bottleneck is not None:
+        bn_txt = f"<div class='small-note'><b>Biggest leak:</b> {bottleneck['Stage']} ({float(bottleneck['Delta %']):+.1f}%)</div>"
 
     inner = f"""
       <div class="diag-strip">Issue Detected: <span style="font-weight:950;">{issue_title}</span></div>
       <div class="chips">{chips_html}</div>
+      {bn_txt}
       <hr class="soft"/>
-      <div class="small-note"><b>Story confidence:</b> <span style="color:{conf_color}; font-weight:950;">{conf}</span>
-      &nbsp; (Residual ratio {split['residual_ratio']:.2f})</div>
+      <div class="small-note"><b>How to read this:</b> Users→Sessions→Pageviews is GA. Requests→Impressions→Revenue is GAM. The “step rates” show exactly where the leak is.</div>
     """
-    st.markdown(panel("Diagnosis", inner), unsafe_allow_html=True)
+    st.markdown(panel("Diagnosis (Pipeline-based)", inner), unsafe_allow_html=True)
 
 with right:
     inner = f"""
-    <div style="display:grid; grid-template-columns: repeat(4, 1fr); gap: 14px;">
+    <div class="mini-grid">
       {mini_card("Users", fmt_compact(t["users"]), d["users"])}
       {mini_card("Pageviews", fmt_compact(t["pageviews"]), d["pageviews"])}
       {mini_card("Ad Requests", fmt_compact(t["ad_requests"]), d["ad_requests"])}
-      {mini_card("Matched Impressions", fmt_compact(t["impressions"]), d["impressions"])}
+      {mini_card("Impressions", fmt_compact(t["impressions"]), d["impressions"])}
     </div>
     <div class="small-note">Deltas above are vs <b>Expected baseline median</b>.</div>
     """
@@ -520,199 +447,118 @@ with right:
 st.write("")
 
 # =========================
-# STORY CARDS (clean)
+# PIPELINE TABLE PANEL
 # =========================
-s1, s2, s3 = st.columns([1.2, 1, 1], gap="large")
+p1, p2 = st.columns([1.2, 1], gap="large")
 
-gap = float(exp["revenue"]) - float(t["revenue"])
-gap_pct = safe_div(gap, float(exp["revenue"]), 100) if float(exp["revenue"]) > 0 else 0.0
-status = "Normal" if gap_pct <= 5 else "Watch" if gap_pct <= 15 else "Critical"
-status_color = "#16a34a" if status == "Normal" else "#f59e0b" if status == "Watch" else "#ef4444"
+with p1:
+    # format display tables
+    df_abs_disp = df_abs.copy()
+    df_abs_disp["Today"] = df_abs_disp["Today"].map(lambda x: f"{x:,.0f}")
+    df_abs_disp["Expected"] = df_abs_disp["Expected"].map(lambda x: f"{x:,.0f}")
+    df_abs_disp["Delta %"] = df_abs["Delta %"].map(lambda x: f"{x:+.1f}%")
 
-with s1:
-    inner = f"""
-    <div style="display:flex; justify-content:space-between; gap:10px; align-items:baseline;">
-      <div>
-        <div style="font-size:13px; font-weight:900; color:#334155;">Today vs Expected</div>
-        <div style="font-size:36px; font-weight:950; color:#0b1220; margin-top:4px;">
-          {"-" if gap > 0 else "+"}{abs(gap):,.0f}
-        </div>
-        <div class="small-note">Expected: ${float(exp['revenue']):,.0f} • Actual: ${float(t['revenue']):,.0f}</div>
-      </div>
-      <div style="text-align:right;">
-        <div style="font-size:13px; font-weight:900; color:#334155;">Status</div>
-        <div style="font-size:22px; font-weight:950; color:{status_color}; margin-top:4px;">{status}</div>
-        <div class="small-note">Gap: {gap_pct:+.1f}%</div>
-      </div>
+    df_steps_disp = df_steps.copy()
+    df_steps_disp["Today"] = df_steps_disp["Today"].map(lambda x: f"{x:,.2f}" if "Rate" not in df_steps_disp["Stage"].iloc[0] else f"{x:,.2f}")
+    # better per-step formatting
+    def fmt_step(stage, val):
+        if "Fill" in stage:
+            return f"{val:,.1f}%"
+        if "eCPM" in stage:
+            return f"${val:,.2f}"
+        return f"{val:,.2f}"
+
+    df_steps_disp["Today"] = [fmt_step(s, v) for s, v in zip(df_steps["Stage"], df_steps["Today"])]
+    df_steps_disp["Expected"] = [fmt_step(s, v) for s, v in zip(df_steps["Stage"], df_steps["Expected"])]
+    df_steps_disp["Delta %"] = df_steps["Delta %"].map(lambda x: f"{x:+.1f}%")
+
+    inner = """
+    <div class="small-note" style="margin-bottom:10px;">
+      <b>Absolute stages:</b> show volume changes.<br/>
+      <b>Step rates:</b> show where the pipeline leaked (these are the actionable levers).
     </div>
     """
-    st.markdown(panel("Loss Meter", inner), unsafe_allow_html=True)
+    st.markdown(panel("Pipeline (GA → GAM)", inner), unsafe_allow_html=True)
+    st.dataframe(df_abs_disp, use_container_width=True, hide_index=True)
+    st.dataframe(df_steps_disp, use_container_width=True, hide_index=True)
 
-with s2:
-    inner = f"""
-    <div style="font-size:13px; font-weight:900; color:#334155;">Loss Split (money story)</div>
-    <div style="margin-top:10px; display:flex; flex-direction:column; gap:8px;">
-      <div><b>Impressions:</b> {split['loss_imp_pct']:.0f}%</div>
-      <div><b>eCPM:</b> {split['loss_ecpm_pct']:.0f}%</div>
-      <div><b>Residual:</b> {split['loss_res_pct']:.0f}%</div>
+with p2:
+    # Contribution panel (what explains revenue change)
+    # show top negative contributions only
+    dfc = df_contrib.copy()
+    dfc["LogContribution"] = dfc["LogContribution"].round(3)
+    dfc["Impact Share %"] = dfc["Impact Share %"].round(1)
+
+    inner = """
+    <div class="small-note">
+      This splits the revenue change into pipeline drivers using a multiplicative model.<br/>
+      <b>Down</b> drivers = likely causes of the drop.
     </div>
-    <div class="small-note">Residual is “unexplained” change (often lag or merge mismatch).</div>
     """
-    st.markdown(panel("Why Revenue Missed", inner), unsafe_allow_html=True)
-
-with s3:
-    # Show the inner split only if impressions are a major driver
-    imp_major = split["loss_imp_pct"] >= split["loss_ecpm_pct"]
-    if imp_major:
-        req_share = 0.0
-        fill_share = 0.0
-        # Convert impression drivers into revenue-equivalent using expected ecpm
-        ecpm_b = split["ecpm_b"]
-        loss_req = max(-(split["req_effect"] * (ecpm_b / 1000)), 0.0)
-        loss_fill = max(-(split["fill_effect"] * (ecpm_b / 1000)), 0.0)
-        denom_rf = (loss_req + loss_fill) if (loss_req + loss_fill) > 0 else 1.0
-        req_share = loss_req / denom_rf * 100
-        fill_share = loss_fill / denom_rf * 100
-
-        inner = f"""
-        <div style="font-size:13px; font-weight:900; color:#334155;">Inside Impressions</div>
-        <div style="margin-top:10px; display:flex; flex-direction:column; gap:8px;">
-          <div><b>Requests:</b> {req_share:.0f}%</div>
-          <div><b>Fill:</b> {fill_share:.0f}%</div>
-        </div>
-        <div class="small-note">Requests/Page expected {split['rpp_b']:.2f} → today {split['rpp_t']:.2f}</div>
-        """
-    else:
-        inner = f"""
-        <div style="font-size:13px; font-weight:900; color:#334155;">eCPM Context</div>
-        <div style="margin-top:10px; display:flex; flex-direction:column; gap:8px;">
-          <div><b>Expected eCPM:</b> ${split['ecpm_b']:.2f}</div>
-          <div><b>Today eCPM:</b> ${split['ecpm_t']:.2f}</div>
-          <div><b>CTR:</b> {t['ctr']:.2f}% (diagnostic only)</div>
-        </div>
-        <div class="small-note">To pinpoint eCPM drop, you’d segment by geo/device/ad unit.</div>
-        """
-    st.markdown(panel("Second-Level Driver", inner), unsafe_allow_html=True)
+    st.markdown(panel("Revenue Change Drivers", inner), unsafe_allow_html=True)
+    st.dataframe(dfc[["Driver","Direction","Impact Share %"]], use_container_width=True, hide_index=True)
 
 st.write("")
 
 # =========================
-# REVENUE BREAKDOWN CHART (like image)
-# Bars: Pageviews
-# Lines: Requests/Page, Fill Rate, eCPM
+# CLEAN TREND CHART (INDEXED) — no distorted dual scales
 # =========================
-st.markdown(panel("Revenue Breakdown (Last 7 days)", ""), unsafe_allow_html=True)
+st.markdown(panel("Trend (Indexed to Expected = 100)", ""), unsafe_allow_html=True)
 
-last7 = daily[daily["date"] <= today].tail(7).copy()
-last7["dow"] = last7["date"].dt.day_name().str.slice(0, 3)
+# last 14 days view
+trend = daily[daily["date"] <= today].tail(14).copy()
+# build index vs expected (baseline median)
+def idx(val, base): return (val / base * 100.0) if base and base != 0 else 0.0
 
-base = alt.Chart(last7).encode(
-    x=alt.X("dow:N", sort=list(last7["dow"]), title=None)
-)
+trend_long = []
+for _, r in trend.iterrows():
+    trend_long += [
+        {"date": r["date"], "Metric": "Revenue", "Index": idx(r["revenue"], exp["revenue"])},
+        {"date": r["date"], "Metric": "Requests/Page", "Index": idx(r["requests_per_page"], exp["requests_per_page"])},
+        {"date": r["date"], "Metric": "Fill Rate", "Index": idx(r["fill_rate"], exp["fill_rate"])},
+        {"date": r["date"], "Metric": "eCPM", "Index": idx(r["ecpm"], exp["ecpm"])},
+        {"date": r["date"], "Metric": "Pageviews", "Index": idx(r["pageviews"], exp["pageviews"])},
+    ]
 
-bars = base.mark_bar(opacity=0.9).encode(
-    y=alt.Y("pageviews:Q", title=None),
-    color=alt.value("#1f77ff"),
-    tooltip=[
-        alt.Tooltip("date:T", title="Date"),
-        alt.Tooltip("pageviews:Q", title="Pageviews", format=","),
-        alt.Tooltip("requests_per_page:Q", title="Requests/Page", format=",.2f"),
-        alt.Tooltip("fill_rate:Q", title="Fill Rate %", format=",.1f"),
-        alt.Tooltip("ecpm:Q", title="eCPM", format="$.2f"),
-    ],
-)
+trend_long = pd.DataFrame(trend_long)
 
-line_rpp = base.mark_line(point=True, strokeWidth=3).encode(
-    y=alt.Y("requests_per_page:Q", title=None),
-    color=alt.value("#f59e0b"),
-)
-
-line_fill = base.mark_line(point=True, strokeWidth=3).encode(
-    y=alt.Y("fill_rate:Q", title=None),
-    color=alt.value("#22c55e"),
-)
-
-line_ecpm = base.mark_line(point=True, strokeWidth=3).encode(
-    y=alt.Y("ecpm:Q", title=None),
-    color=alt.value("#7c3aed"),
-)
-
-chart = alt.layer(bars, line_rpp, line_fill, line_ecpm).resolve_scale(
-    y="independent"
-).properties(height=320).configure_view(
-    stroke=None
-).configure_axis(
-    labelColor="#334155",
-    gridColor="#e5e7eb",
-    tickColor="#cbd5e1",
-).configure_legend(
-    orient="top",
-    title=None
+chart = (
+    alt.Chart(trend_long)
+    .mark_line(point=True, strokeWidth=3)
+    .encode(
+        x=alt.X("date:T", title=None),
+        y=alt.Y("Index:Q", title=None),
+        color=alt.Color("Metric:N", legend=alt.Legend(orient="top")),
+        tooltip=[
+            alt.Tooltip("date:T", title="Date"),
+            alt.Tooltip("Metric:N"),
+            alt.Tooltip("Index:Q", title="Index (Expected=100)", format=",.0f"),
+        ],
+    )
+    .properties(height=320)
+    .configure_view(stroke=None)
+    .configure_axis(labelColor="#334155", gridColor="#e5e7eb", tickColor="#cbd5e1")
 )
 
 st.altair_chart(chart, use_container_width=True)
-
-st.caption("All ratio metrics are derived from daily totals. Expected reference is baseline median totals (not averages of ratios).")
+st.caption("This avoids mixed Y-scales. Index 100 = expected baseline median. Below 100 = underperforming vs expected.")
 
 st.write("")
 
 # =========================
-# OPTIONAL: Decomposition tables (very helpful for ops)
-# =========================
-with st.expander("Show decomposition numbers (for debugging & audits)"):
-    # Revenue decomposition vs expected
-    rev_t, rev_b = float(t["revenue"]), float(exp["revenue"])
-    imp_t, imp_b = float(t["impressions"]), float(exp["impressions"])
-    ecpm_t, ecpm_b = split["ecpm_t"], split["ecpm_b"]
-
-    d_rev = rev_t - rev_b
-    imp_effect = split["imp_effect"]
-    ecpm_effect = split["ecpm_effect"]
-    residual = split["residual"]
-
-    # Impressions decomposition vs expected
-    req_t, req_b = float(t["ad_requests"]), float(exp["ad_requests"])
-    fill_t, fill_b = split["fill_t"], split["fill_b"]
-
-    d_imp = imp_t - imp_b
-    req_effect = split["req_effect"]
-    fill_effect = split["fill_effect"]
-    imp_residual = split["imp_residual"]
-
-    st.subheader("Revenue decomposition (Expected → Today)")
-    st.write(pd.DataFrame([
-        {"Component": "Expected Revenue", "Value": rev_b},
-        {"Component": "Impressions effect", "Value": imp_effect},
-        {"Component": "eCPM effect", "Value": ecpm_effect},
-        {"Component": "Residual", "Value": residual},
-        {"Component": "Today Revenue", "Value": rev_t},
-        {"Component": "Check (Today - Expected)", "Value": d_rev},
-    ]))
-
-    st.subheader("Impressions decomposition (Expected → Today)")
-    st.write(pd.DataFrame([
-        {"Component": "Expected Impressions", "Value": imp_b},
-        {"Component": "Requests effect", "Value": req_effect},
-        {"Component": "Fill effect", "Value": fill_effect},
-        {"Component": "Residual", "Value": imp_residual},
-        {"Component": "Today Impressions", "Value": imp_t},
-        {"Component": "Check (Today - Expected)", "Value": d_imp},
-    ]))
-
-# =========================
-# DATA SANITY CHECKS (merge correctness)
+# SANITY CHECKS
 # =========================
 checks = []
 if t["sessions"] > 0 and t["pageviews"] == 0:
-    checks.append("Sessions > 0 but Pageviews = 0 → GA4 pull may be incomplete for this day.")
+    checks.append("Sessions > 0 but Pageviews = 0 → GA4 pull may be incomplete.")
 if t["pageviews"] > 0 and t["ad_requests"] == 0:
-    checks.append("Pageviews > 0 but Ad Requests = 0 → tag/ad-call issue OR GAM data missing.")
+    checks.append("Pageviews > 0 but Ad Requests = 0 → tag/slot/CMP issue OR GAM data missing.")
 if t["ad_requests"] > 0 and t["impressions"] == 0:
     checks.append("Ad Requests > 0 but Impressions = 0 → fill collapsed OR GAM reporting lag.")
 if t["impressions"] > 0 and t["revenue"] == 0:
     checks.append("Impressions > 0 but Revenue = 0 → revenue reporting lag OR merge mismatch.")
-if float(exp["revenue"]) == 0 and not baseline_df.empty:
-    checks.append("Baseline expected revenue is 0 but baseline rows exist → baseline median issue (too many zeros).")
+if (not baseline_df.empty) and float(exp["revenue"]) == 0:
+    checks.append("Expected revenue baseline is 0 but baseline rows exist → too many zeros in baseline window.")
 
 if checks:
     st.markdown(panel("Sanity Checks", "<br/>".join([f"• {c}" for c in checks])), unsafe_allow_html=True)
