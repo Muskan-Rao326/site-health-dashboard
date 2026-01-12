@@ -1,16 +1,24 @@
 # app.py
 # Publisher Performance Dashboard (GA4 + GAM) — Professional + clean (PowerBI-like)
 #
-# Fixes:
-# - Correct "Why Revenue Missed" logic (loss-only decomposition)
-# - Correct "Second-Level Driver" logic (chooses biggest loss driver correctly)
-# - Correct inside-impressions split (Requests vs Fill) using loss-causing portions only
-# - Z-score added but displayed ONLY as a single text label under Status (keeps UI clean)
+# ✅ Fix in this version:
+#   1) Your "raw <div>" issue is fixed (it was happening due to indentation -> markdown code block)
+#      - We use textwrap.dedent() inside panel() so HTML always renders correctly.
+#   2) "Why Revenue Missed" + "Second-Level Driver" logic is consistent and correct
+#      - Miss-only split when revenue is below expected
+#      - Second-level driver chosen based on real loss contributors (not misleading % labels)
+#   3) Z-score added as TEXT ONLY under Status (Noise-like movement / Statistically abnormal)
+#
+# NOTE:
+# - Do NOT wrap this file in ```python when pasting into app.py (that causes SyntaxError).
+# - Your CSV must contain: date, users, sessions, pageviews, ad_requests, impressions, clicks, revenue
+# - Optional: site_name for site dropdown.
 
 import streamlit as st
 import pandas as pd
 import numpy as np
 import altair as alt
+import textwrap
 from datetime import timedelta
 
 # =========================
@@ -129,10 +137,12 @@ hr.soft { border:none; height:1px; background:#e7eef7; margin: 12px 0; }
 def safe_div(n, d, mult=1.0):
     return (n / d) * mult if d and d != 0 else 0.0
 
+
 def pct_change(new, old):
     if old == 0:
         return 0.0 if new == 0 else -100.0
     return (new - old) / old * 100.0
+
 
 def fmt_compact(x):
     x = float(x)
@@ -144,10 +154,12 @@ def fmt_compact(x):
         return f"{sign}{x/1_000:.0f}K"
     return f"{sign}{x:.0f}"
 
+
 def badge_class(delta_pct):
     if np.isnan(delta_pct):
         return "badge-gray"
     return "badge-red" if delta_pct < 0 else "badge-green"
+
 
 def kpi_card(label, value_str, delta_pct):
     b = badge_class(delta_pct)
@@ -159,10 +171,12 @@ def kpi_card(label, value_str, delta_pct):
     </div>
     """
 
+
 def mini_card(label, value_str, delta_pct):
     mag = min(abs(delta_pct) / 40.0, 1.0)
     color = "#ef4444" if delta_pct < 0 else "#16a34a"
     sign = "▼" if delta_pct < 0 else "▲"
+
     if abs(delta_pct) < 1:
         txt = "= 0%"
         color_txt = "#0b1220"
@@ -184,13 +198,17 @@ def mini_card(label, value_str, delta_pct):
     </div>
     """
 
+
+# ✅ CRITICAL FIX: dedent inner_html so Streamlit does NOT treat it as a code block
 def panel(title, inner_html):
+    inner_html = textwrap.dedent(inner_html).strip()
     return f"""
     <div class="panel">
       <div class="panel-title">{title}</div>
       {inner_html}
     </div>
     """
+
 
 # =========================
 # Z-SCORE (TEXT ONLY)
@@ -204,7 +222,6 @@ def z_label(value: float, baseline_series: pd.Series):
     sigma = float(s.std(ddof=0))
 
     if sigma <= 1e-9:
-        # fallback: use pct thresholds if baseline is flat
         if mu == 0:
             return "Noise-like movement"
         pct = safe_div(value - mu, mu, 100)
@@ -212,6 +229,7 @@ def z_label(value: float, baseline_series: pd.Series):
 
     z = (value - mu) / sigma
     return "Statistically abnormal" if abs(z) >= 2 else "Noise-like movement"
+
 
 # =========================
 # LOAD CSV
@@ -224,6 +242,7 @@ def load_csv(file) -> pd.DataFrame:
     df["date"] = pd.to_datetime(df["date"], errors="coerce").dt.normalize()
     df = df.dropna(subset=["date"]).sort_values("date")
     return df
+
 
 uploaded = st.file_uploader("Upload merged GA4 + GAM CSV", type=["csv"])
 if not uploaded:
@@ -279,7 +298,6 @@ if today_df.empty:
     st.stop()
 
 t = today_df.iloc[0].to_dict()
-
 baseline_df = daily[(daily["date"] < today) & (daily["date"] >= baseline_start)]
 
 # Expected = baseline median totals
@@ -297,7 +315,19 @@ else:
 
 # Deltas vs expected
 d = {}
-for k in ["revenue", "ecpm", "fill_rate", "requests_per_page", "users", "sessions", "pageviews", "ad_requests", "impressions", "rpm", "ctr"]:
+for k in [
+    "revenue",
+    "ecpm",
+    "fill_rate",
+    "requests_per_page",
+    "users",
+    "sessions",
+    "pageviews",
+    "ad_requests",
+    "impressions",
+    "rpm",
+    "ctr",
+]:
     d[k] = pct_change(t.get(k, 0.0), exp.get(k, 0.0))
 
 # Z-score flag (text only, revenue)
@@ -353,7 +383,7 @@ with c4:
 st.write("")
 
 # =========================
-# INSIGHT ENGINE (CORRECTED LOSS LOGIC)
+# INSIGHT ENGINE (loss-correct)
 # =========================
 def root_cause_story(t, exp):
     # Totals
@@ -393,14 +423,10 @@ def root_cause_story(t, exp):
     else:
         conf = "Low"
 
-    # LOSS-ONLY math: gap is missed revenue (Expected - Today)
-    gap = rev_b - rev_t  # positive = missed
-    loss_imp = 0.0
-    loss_ecpm = 0.0
-    loss_res = 0.0
-
+    # LOSS-ONLY (miss) math
+    gap = rev_b - rev_t  # positive = missed revenue
+    loss_imp = loss_ecpm = loss_res = 0.0
     if gap > 0:
-        # Only negative contributors that create the miss:
         loss_imp = max(-(imp_effect), 0.0)
         loss_ecpm = max(-(ecpm_effect), 0.0)
         loss_res = max(-(residual), 0.0)
@@ -450,30 +476,32 @@ def root_cause_story(t, exp):
 
     if gap > 0:
         story.append(f"Today missed expected revenue by ${gap:,.0f} (Expected baseline median).")
-        story.append(f"Miss split: {split['loss_imp_pct']:.0f}% Impressions, {split['loss_ecpm_pct']:.0f}% eCPM, {split['loss_res_pct']:.0f}% residual.")
+        story.append(
+            f"Miss split: {split['loss_imp_pct']:.0f}% Impressions, {split['loss_ecpm_pct']:.0f}% eCPM, {split['loss_res_pct']:.0f}% residual."
+        )
 
-    # 1) Setup leak: PV OK but RPP down
+    # 1) Setup leak
     if pv_stable and rpp_down:
         issue = "Setup Problem"
         chips = [("Requests/Page Down", "red"), ("Pageviews OK", "green")]
         story.append("Pageviews are stable but Requests/Page dropped → ad calls missing per pageview (tag/CMP/adblock/template).")
         return issue, chips, story, split
 
-    # 2) Traffic problem
+    # 2) Traffic
     if users_down and (pv_b > 0 and pv_t <= pv_b * 0.90):
         issue = "Traffic Problem"
         chips = [("Users Down", "red"), ("Pageviews Down", "red")]
         story.append("Traffic is down → fewer pageviews → fewer ad opportunities.")
         return issue, chips, story, split
 
-    # 3) Fill problem
+    # 3) Fill
     if (not req_down) and fill_down:
         issue = "Demand / Fill Problem"
         chips = [("Fill Rate Down", "red"), ("Requests OK", "green")]
         story.append("Requests are present but fill dropped → demand/floors/blocks/policy/buyer loss.")
         return issue, chips, story, split
 
-    # 4) eCPM problem
+    # 4) eCPM
     imp_stable = imp_b > 0 and imp_t >= imp_b * 0.95
     if imp_stable and ecpm_down:
         issue = "Pricing / eCPM Problem"
@@ -487,10 +515,11 @@ def root_cause_story(t, exp):
         story.append("Residual is high → reporting lag / merge mismatch is likely. Treat as directional.")
     return issue, chips, story, split
 
+
 issue_title, chips, story_lines, split = root_cause_story(t, exp)
 
 # =========================
-# MIDDLE ROW (Diagnosis + Key Metrics Overview)
+# MIDDLE ROW (Diagnosis + Key Metrics)
 # =========================
 left, right = st.columns([1.2, 1.6], gap="large")
 
@@ -510,11 +539,11 @@ with left:
     conf_color = "#16a34a" if conf == "High" else "#f59e0b" if conf == "Medium" else "#ef4444"
 
     inner = f"""
-      <div class="diag-strip">Issue Detected: <span style="font-weight:950;">{issue_title}</span></div>
-      <div class="chips">{chips_html}</div>
-      <hr class="soft"/>
-      <div class="small-note"><b>Story confidence:</b> <span style="color:{conf_color}; font-weight:950;">{conf}</span>
-      &nbsp; (Residual ratio {split['residual_ratio']:.2f})</div>
+    <div class="diag-strip">Issue Detected: <span style="font-weight:950;">{issue_title}</span></div>
+    <div class="chips">{chips_html}</div>
+    <hr class="soft"/>
+    <div class="small-note"><b>Story confidence:</b> <span style="color:{conf_color}; font-weight:950;">{conf}</span>
+    &nbsp; (Residual ratio {split['residual_ratio']:.2f})</div>
     """
     st.markdown(panel("Diagnosis", inner), unsafe_allow_html=True)
 
@@ -533,7 +562,7 @@ with right:
 st.write("")
 
 # =========================
-# STORY CARDS (FIXED)
+# STORY CARDS
 # =========================
 s1, s2, s3 = st.columns([1.2, 1, 1], gap="large")
 
@@ -573,23 +602,24 @@ with s2:
           <div><b>eCPM:</b> {split['loss_ecpm_pct']:.0f}%</div>
           <div><b>Residual:</b> {split['loss_res_pct']:.0f}%</div>
         </div>
-        <div class="small-note">These are only the portions that contributed to the revenue miss.</div>
+        <div class="small-note">Only the portions that contributed to the revenue miss.</div>
         """
     else:
         inner = """
-        <div style="font-size:13px; font-weight:900; color:#334155;">Why Revenue Missed</div>
-        <div style="margin-top:10px; font-weight:900; color:#16a34a;">No miss vs Expected.</div>
-        <div class="small-note">Today is at or above Expected baseline median.</div>
+        <div style="font-size:13px; font-weight:900; color:#334155;">No miss vs Expected</div>
+        <div style="margin-top:10px; font-weight:900; color:#16a34a;">Revenue is at or above Expected baseline.</div>
         """
     st.markdown(panel("Why Revenue Missed", inner), unsafe_allow_html=True)
 
 with s3:
-    # Decide driver based on TRUE loss components (not % labels)
-    imp_major = (split["loss_imp"] >= split["loss_ecpm"]) if gap > 0 else (abs(split["imp_effect"]) >= abs(split["ecpm_effect"]))
+    # Decide driver based on TRUE loss components
+    if gap > 0:
+        imp_major = split["loss_imp"] >= split["loss_ecpm"]
+    else:
+        imp_major = abs(split["imp_effect"]) >= abs(split["ecpm_effect"])
 
     if imp_major:
-        # Inside impressions: split loss into Requests vs Fill using LOSS-causing portions only
-        # Requests effect & Fill effect are in impression units; convert to revenue-equivalent using baseline eCPM
+        # Inside impressions split (loss-only): Requests vs Fill
         ecpm_b = float(split["ecpm_b"])
         loss_req_imp = max(-(split["req_effect"]), 0.0)
         loss_fill_imp = max(-(split["fill_effect"]), 0.0)
@@ -626,7 +656,7 @@ st.write("")
 # =========================
 # REVENUE BREAKDOWN CHART
 # =========================
-st.markdown(panel("Revenue Breakdown (Last 7 days)", ""), unsafe_allow_html=True)
+st.markdown(panel("Revenue Breakdown (Last 7 days)", "<div></div>"), unsafe_allow_html=True)
 
 last7 = daily[daily["date"] <= today].tail(7).copy()
 last7["dow"] = last7["date"].dt.day_name().str.slice(0, 3)
@@ -662,17 +692,13 @@ line_ecpm = base.mark_line(point=True, strokeWidth=3).encode(
     color=alt.value("#7c3aed"),
 )
 
-chart = alt.layer(bars, line_rpp, line_fill, line_ecpm).resolve_scale(
-    y="independent"
-).properties(height=320).configure_view(
-    stroke=None
-).configure_axis(
-    labelColor="#334155",
-    gridColor="#e5e7eb",
-    tickColor="#cbd5e1",
-).configure_legend(
-    orient="top",
-    title=None
+chart = (
+    alt.layer(bars, line_rpp, line_fill, line_ecpm)
+    .resolve_scale(y="independent")
+    .properties(height=320)
+    .configure_view(stroke=None)
+    .configure_axis(labelColor="#334155", gridColor="#e5e7eb", tickColor="#cbd5e1")
+    .configure_legend(orient="top", title=None)
 )
 
 st.altair_chart(chart, use_container_width=True)
@@ -698,4 +724,7 @@ if float(exp["revenue"]) == 0 and not baseline_df.empty:
 if checks:
     st.markdown(panel("Sanity Checks", "<br/>".join([f"• {c}" for c in checks])), unsafe_allow_html=True)
 else:
-    st.markdown(panel("Sanity Checks", "<span class='small-note'>No obvious integrity red flags for selected day.</span>"), unsafe_allow_html=True)
+    st.markdown(
+        panel("Sanity Checks", "<span class='small-note'>No obvious integrity red flags for selected day.</span>"),
+        unsafe_allow_html=True,
+    )
