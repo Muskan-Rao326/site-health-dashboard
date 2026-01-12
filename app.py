@@ -1,5 +1,11 @@
 # app.py
 # Publisher Performance Dashboard (GA4 + GAM) — Professional + clean (PowerBI-like)
+#
+# Fixes:
+# - Correct "Why Revenue Missed" logic (loss-only decomposition)
+# - Correct "Second-Level Driver" logic (chooses biggest loss driver correctly)
+# - Correct inside-impressions split (Requests vs Fill) using loss-causing portions only
+# - Z-score added but displayed ONLY as a single text label under Status (keeps UI clean)
 
 import streamlit as st
 import pandas as pd
@@ -111,7 +117,6 @@ st.markdown(
 .chip-amber{ background:#ffedd5; border-color:#f59e0b; }
 
 .small-note{ font-size: 12px; color:#475569; font-weight: 650; margin-top: 8px; }
-
 hr.soft { border:none; height:1px; background:#e7eef7; margin: 12px 0; }
 </style>
 """,
@@ -119,7 +124,7 @@ hr.soft { border:none; height:1px; background:#e7eef7; margin: 12px 0; }
 )
 
 # =========================
-# HELPERS
+# HELPERS (correct math)
 # =========================
 def safe_div(n, d, mult=1.0):
     return (n / d) * mult if d and d != 0 else 0.0
@@ -188,54 +193,25 @@ def panel(title, inner_html):
     """
 
 # =========================
-# STAT SIGNAL (Z-score labels only)
+# Z-SCORE (TEXT ONLY)
 # =========================
 def z_label(value: float, baseline_series: pd.Series):
     s = pd.to_numeric(baseline_series, errors="coerce").dropna()
     if len(s) < 5:
-        return "Low baseline data", "amber"
+        return "Noise-like movement"
 
     mu = float(s.mean())
     sigma = float(s.std(ddof=0))
 
     if sigma <= 1e-9:
+        # fallback: use pct thresholds if baseline is flat
         if mu == 0:
-            return "No baseline", "amber"
+            return "Noise-like movement"
         pct = safe_div(value - mu, mu, 100)
-        if pct <= -20:
-            return "Critical drop", "red"
-        if pct <= -10:
-            return "Unusual drop", "amber"
-        if pct >= 20:
-            return "Critical spike", "green"
-        if pct >= 10:
-            return "Unusual spike", "green"
-        return "Normal variation", "gray"
+        return "Statistically abnormal" if abs(pct) >= 20 else "Noise-like movement"
 
     z = (value - mu) / sigma
-    if z <= -3:
-        return "Critical drop", "red"
-    if z <= -2:
-        return "Unusual drop", "amber"
-    if z >= 3:
-        return "Critical spike", "green"
-    if z >= 2:
-        return "Unusual spike", "green"
-    return "Normal variation", "gray"
-
-def stat_chip(label_text, severity):
-    if severity == "red":
-        cls = "chip chip-red"
-    elif severity == "green":
-        cls = "chip chip-green"
-    elif severity == "amber":
-        cls = "chip chip-amber"
-    else:
-        cls = "chip"
-    return f'<div class="{cls}">{label_text}</div>'
-
-def is_stat_abnormal(label_text: str) -> bool:
-    return label_text in {"Unusual drop", "Critical drop", "Unusual spike", "Critical spike"}
+    return "Statistically abnormal" if abs(z) >= 2 else "Noise-like movement"
 
 # =========================
 # LOAD CSV
@@ -255,12 +231,14 @@ if not uploaded:
 
 df_raw = load_csv(uploaded)
 
+# Site selector (if present)
 site = None
 if "site_name" in df_raw.columns:
     sites = sorted(df_raw["site_name"].dropna().unique().tolist())
     site = st.sidebar.selectbox("Site", sites, index=0)
     df_raw = df_raw[df_raw["site_name"] == site].copy()
 
+# Required totals (GA4 + GAM)
 base_cols = ["users", "sessions", "pageviews", "ad_requests", "impressions", "clicks", "revenue"]
 missing = [c for c in base_cols if c not in df_raw.columns]
 if missing:
@@ -270,8 +248,10 @@ if missing:
 for c in base_cols:
     df_raw[c] = pd.to_numeric(df_raw[c], errors="coerce").fillna(0.0)
 
+# Daily totals (ONLY totals are summed)
 daily = df_raw.groupby("date", as_index=False)[base_cols].sum().sort_values("date")
 
+# Derived ratios (NEVER SUM these)
 daily["ecpm"] = daily.apply(lambda r: safe_div(r["revenue"], r["impressions"], 1000), axis=1)
 daily["fill_rate"] = daily.apply(lambda r: safe_div(r["impressions"], r["ad_requests"], 100), axis=1)
 daily["requests_per_page"] = daily.apply(lambda r: safe_div(r["ad_requests"], r["pageviews"], 1), axis=1)
@@ -299,8 +279,10 @@ if today_df.empty:
     st.stop()
 
 t = today_df.iloc[0].to_dict()
+
 baseline_df = daily[(daily["date"] < today) & (daily["date"] >= baseline_start)]
 
+# Expected = baseline median totals
 if baseline_df.empty:
     exp = {c: 0.0 for c in base_cols}
     exp.update({"ecpm": 0.0, "fill_rate": 0.0, "requests_per_page": 0.0, "ctr": 0.0, "rpm": 0.0})
@@ -313,20 +295,15 @@ else:
     exp["ctr"] = safe_div(exp["clicks"], exp["impressions"], 100)
     exp["rpm"] = safe_div(exp["revenue"], exp["pageviews"], 1000)
 
+# Deltas vs expected
 d = {}
 for k in ["revenue", "ecpm", "fill_rate", "requests_per_page", "users", "sessions", "pageviews", "ad_requests", "impressions", "rpm", "ctr"]:
     d[k] = pct_change(t.get(k, 0.0), exp.get(k, 0.0))
 
-# STAT (labels only)
-stat = {}
-if baseline_df.empty:
-    for k in ["revenue", "requests_per_page", "fill_rate", "ecpm"]:
-        stat[k] = ("Low baseline data", "amber")
-else:
-    stat["revenue"] = z_label(float(t["revenue"]), baseline_df["revenue"])
-    stat["requests_per_page"] = z_label(float(t["requests_per_page"]), baseline_df["requests_per_page"])
-    stat["fill_rate"] = z_label(float(t["fill_rate"]), baseline_df["fill_rate"])
-    stat["ecpm"] = z_label(float(t["ecpm"]), baseline_df["ecpm"])
+# Z-score flag (text only, revenue)
+stat_flag = "Noise-like movement"
+if not baseline_df.empty:
+    stat_flag = z_label(float(t["revenue"]), baseline_df["revenue"])
 
 # =========================
 # HEADER
@@ -376,13 +353,15 @@ with c4:
 st.write("")
 
 # =========================
-# INSIGHT ENGINE (unchanged)
+# INSIGHT ENGINE (CORRECTED LOSS LOGIC)
 # =========================
 def root_cause_story(t, exp):
+    # Totals
     rev_t, rev_b = float(t["revenue"]), float(exp["revenue"])
     imp_t, imp_b = float(t["impressions"]), float(exp["impressions"])
     req_t, req_b = float(t["ad_requests"]), float(exp["ad_requests"])
 
+    # Derived
     ecpm_t = safe_div(rev_t, imp_t, 1000)
     ecpm_b = safe_div(rev_b, imp_b, 1000)
 
@@ -392,16 +371,19 @@ def root_cause_story(t, exp):
     rpp_t = safe_div(req_t, float(t["pageviews"]), 1) if float(t["pageviews"]) else 0.0
     rpp_b = safe_div(req_b, float(exp["pageviews"]), 1) if float(exp["pageviews"]) else 0.0
 
+    # Revenue identity: Rev = Imp * eCPM / 1000
     d_rev = rev_t - rev_b
     imp_effect = (imp_t - imp_b) * (ecpm_b / 1000)
     ecpm_effect = imp_t * ((ecpm_t - ecpm_b) / 1000)
     residual = d_rev - (imp_effect + ecpm_effect)
 
+    # Impressions identity: Imp = Req * Fill/100
     d_imp = imp_t - imp_b
     req_effect = (req_t - req_b) * (fill_b / 100)
     fill_effect = req_t * ((fill_t - fill_b) / 100)
     imp_residual = d_imp - (req_effect + fill_effect)
 
+    # Confidence
     denom = abs(d_rev) if abs(d_rev) > 1e-9 else max(abs(rev_b), 1.0)
     residual_ratio = abs(residual) / denom
     if residual_ratio <= 0.10:
@@ -411,17 +393,28 @@ def root_cause_story(t, exp):
     else:
         conf = "Low"
 
-    gap = rev_b - rev_t
-    loss_imp = max(-imp_effect, 0.0)
-    loss_ecpm = max(-ecpm_effect, 0.0)
-    loss_res = max(-residual, 0.0)
+    # LOSS-ONLY math: gap is missed revenue (Expected - Today)
+    gap = rev_b - rev_t  # positive = missed
+    loss_imp = 0.0
+    loss_ecpm = 0.0
+    loss_res = 0.0
+
+    if gap > 0:
+        # Only negative contributors that create the miss:
+        loss_imp = max(-(imp_effect), 0.0)
+        loss_ecpm = max(-(ecpm_effect), 0.0)
+        loss_res = max(-(residual), 0.0)
+
     denom_loss = (loss_imp + loss_ecpm + loss_res) if (loss_imp + loss_ecpm + loss_res) > 0 else 1.0
 
     split = {
         "gap": gap,
-        "loss_imp_pct": loss_imp / denom_loss * 100,
-        "loss_ecpm_pct": loss_ecpm / denom_loss * 100,
-        "loss_res_pct": loss_res / denom_loss * 100,
+        "loss_imp": loss_imp,
+        "loss_ecpm": loss_ecpm,
+        "loss_res": loss_res,
+        "loss_imp_pct": (loss_imp / denom_loss * 100) if gap > 0 else 0.0,
+        "loss_ecpm_pct": (loss_ecpm / denom_loss * 100) if gap > 0 else 0.0,
+        "loss_res_pct": (loss_res / denom_loss * 100) if gap > 0 else 0.0,
         "imp_effect": imp_effect,
         "ecpm_effect": ecpm_effect,
         "residual": residual,
@@ -436,8 +429,13 @@ def root_cause_story(t, exp):
         "rpp_b": rpp_b,
         "ecpm_t": ecpm_t,
         "ecpm_b": ecpm_b,
+        "imp_t": imp_t,
+        "imp_b": imp_b,
+        "req_t": req_t,
+        "req_b": req_b,
     }
 
+    # Diagnosis rules
     pv_t, pv_b = float(t["pageviews"]), float(exp["pageviews"])
     pv_stable = pv_b > 0 and pv_t >= pv_b * 0.95
     rpp_down = rpp_b > 0 and rpp_t <= rpp_b * 0.90
@@ -445,7 +443,6 @@ def root_cause_story(t, exp):
     req_down = req_b > 0 and req_t <= req_b * 0.90
     fill_down = fill_b > 0 and fill_t <= fill_b * 0.90
     ecpm_down = ecpm_b > 0 and ecpm_t <= ecpm_b * 0.90
-
     users_down = float(exp["users"]) > 0 and float(t["users"]) <= float(exp["users"]) * 0.90
 
     chips = []
@@ -453,43 +450,47 @@ def root_cause_story(t, exp):
 
     if gap > 0:
         story.append(f"Today missed expected revenue by ${gap:,.0f} (Expected baseline median).")
-        story.append(f"Loss split: {split['loss_imp_pct']:.0f}% Impressions, {split['loss_ecpm_pct']:.0f}% eCPM, {split['loss_res_pct']:.0f}% residual.")
+        story.append(f"Miss split: {split['loss_imp_pct']:.0f}% Impressions, {split['loss_ecpm_pct']:.0f}% eCPM, {split['loss_res_pct']:.0f}% residual.")
 
+    # 1) Setup leak: PV OK but RPP down
     if pv_stable and rpp_down:
         issue = "Setup Problem"
-        chips = [("Tag Issue", "green"), ("Ad Density Drop", "neutral"), ("Requests/Page Down", "red")]
-        story.append("Pageviews are stable but Requests/Page dropped → ad calls are missing per pageview (tag/CMP/adblock/template).")
+        chips = [("Requests/Page Down", "red"), ("Pageviews OK", "green")]
+        story.append("Pageviews are stable but Requests/Page dropped → ad calls missing per pageview (tag/CMP/adblock/template).")
         return issue, chips, story, split
 
+    # 2) Traffic problem
     if users_down and (pv_b > 0 and pv_t <= pv_b * 0.90):
         issue = "Traffic Problem"
         chips = [("Users Down", "red"), ("Pageviews Down", "red")]
         story.append("Traffic is down → fewer pageviews → fewer ad opportunities.")
         return issue, chips, story, split
 
+    # 3) Fill problem
     if (not req_down) and fill_down:
         issue = "Demand / Fill Problem"
         chips = [("Fill Rate Down", "red"), ("Requests OK", "green")]
         story.append("Requests are present but fill dropped → demand/floors/blocks/policy/buyer loss.")
         return issue, chips, story, split
 
+    # 4) eCPM problem
     imp_stable = imp_b > 0 and imp_t >= imp_b * 0.95
     if imp_stable and ecpm_down:
         issue = "Pricing / eCPM Problem"
         chips = [("eCPM Down", "red"), ("Impressions OK", "green")]
-        story.append("Impressions are stable but eCPM dropped → buyers paid less per 1,000 impressions (mix or demand quality).")
+        story.append("Impressions are stable but eCPM dropped → buyers paid less per 1,000 impressions (mix/demand quality).")
         return issue, chips, story, split
 
     issue = "Mixed Movement"
-    chips = [("Check Segments", "neutral")]
+    chips = [("Check Segments", "amber")]
     if gap > 0 and split["conf"] == "Low":
-        story.append("Residual is high → this day may have reporting lag / merge mismatch. Treat as directional.")
+        story.append("Residual is high → reporting lag / merge mismatch is likely. Treat as directional.")
     return issue, chips, story, split
 
 issue_title, chips, story_lines, split = root_cause_story(t, exp)
 
 # =========================
-# MIDDLE ROW
+# MIDDLE ROW (Diagnosis + Key Metrics Overview)
 # =========================
 left, right = st.columns([1.2, 1.6], gap="large")
 
@@ -505,24 +506,12 @@ with left:
             cls = "chip chip-amber"
         chips_html += f'<div class="{cls}">{label}</div>'
 
-    rev_txt, rev_sev = stat.get("revenue", ("Low baseline data", "amber"))
-    rpp_txt, rpp_sev = stat.get("requests_per_page", ("Low baseline data", "amber"))
-    fill_txt, fill_sev = stat.get("fill_rate", ("Low baseline data", "amber"))
-    ecpm_txt, ecpm_sev = stat.get("ecpm", ("Low baseline data", "amber"))
-
-    stat_chips = ""
-    stat_chips += stat_chip(f"Revenue: {rev_txt}", rev_sev)
-    stat_chips += stat_chip(f"Req/Page: {rpp_txt}", rpp_sev)
-    stat_chips += stat_chip(f"Fill: {fill_txt}", fill_sev)
-    stat_chips += stat_chip(f"eCPM: {ecpm_txt}", ecpm_sev)
-
     conf = split["conf"]
     conf_color = "#16a34a" if conf == "High" else "#f59e0b" if conf == "Medium" else "#ef4444"
 
     inner = f"""
       <div class="diag-strip">Issue Detected: <span style="font-weight:950;">{issue_title}</span></div>
       <div class="chips">{chips_html}</div>
-      <div class="chips">{stat_chips}</div>
       <hr class="soft"/>
       <div class="small-note"><b>Story confidence:</b> <span style="color:{conf_color}; font-weight:950;">{conf}</span>
       &nbsp; (Residual ratio {split['residual_ratio']:.2f})</div>
@@ -544,7 +533,7 @@ with right:
 st.write("")
 
 # =========================
-# STORY CARDS
+# STORY CARDS (FIXED)
 # =========================
 s1, s2, s3 = st.columns([1.2, 1, 1], gap="large")
 
@@ -553,8 +542,6 @@ gap_pct = safe_div(gap, float(exp["revenue"]), 100) if float(exp["revenue"]) > 0
 status = "Normal" if gap_pct <= 5 else "Watch" if gap_pct <= 15 else "Critical"
 status_color = "#16a34a" if status == "Normal" else "#f59e0b" if status == "Watch" else "#ef4444"
 
-rev_stat_label = stat.get("revenue", ("Low baseline data", "amber"))[0]
-stat_flag = "Statistically abnormal" if is_stat_abnormal(rev_stat_label) else "Noise-like"
 stat_flag_color = "#ef4444" if stat_flag == "Statistically abnormal" else "#64748b"
 
 with s1:
@@ -578,29 +565,44 @@ with s1:
     st.markdown(panel("Loss Meter", inner), unsafe_allow_html=True)
 
 with s2:
-    inner = f"""
-    <div style="font-size:13px; font-weight:900; color:#334155;">Loss Split (money story)</div>
-    <div style="margin-top:10px; display:flex; flex-direction:column; gap:8px;">
-      <div><b>Impressions:</b> {split['loss_imp_pct']:.0f}%</div>
-      <div><b>eCPM:</b> {split['loss_ecpm_pct']:.0f}%</div>
-      <div><b>Residual:</b> {split['loss_res_pct']:.0f}%</div>
-    </div>
-    <div class="small-note">Residual is “unexplained” change (often lag or merge mismatch).</div>
-    """
+    if gap > 0:
+        inner = f"""
+        <div style="font-size:13px; font-weight:900; color:#334155;">Miss Split (loss-only)</div>
+        <div style="margin-top:10px; display:flex; flex-direction:column; gap:8px;">
+          <div><b>Impressions:</b> {split['loss_imp_pct']:.0f}%</div>
+          <div><b>eCPM:</b> {split['loss_ecpm_pct']:.0f}%</div>
+          <div><b>Residual:</b> {split['loss_res_pct']:.0f}%</div>
+        </div>
+        <div class="small-note">These are only the portions that contributed to the revenue miss.</div>
+        """
+    else:
+        inner = """
+        <div style="font-size:13px; font-weight:900; color:#334155;">Why Revenue Missed</div>
+        <div style="margin-top:10px; font-weight:900; color:#16a34a;">No miss vs Expected.</div>
+        <div class="small-note">Today is at or above Expected baseline median.</div>
+        """
     st.markdown(panel("Why Revenue Missed", inner), unsafe_allow_html=True)
 
 with s3:
-    imp_major = split["loss_imp_pct"] >= split["loss_ecpm_pct"]
+    # Decide driver based on TRUE loss components (not % labels)
+    imp_major = (split["loss_imp"] >= split["loss_ecpm"]) if gap > 0 else (abs(split["imp_effect"]) >= abs(split["ecpm_effect"]))
+
     if imp_major:
-        ecpm_b = split["ecpm_b"]
-        loss_req = max(-(split["req_effect"] * (ecpm_b / 1000)), 0.0)
-        loss_fill = max(-(split["fill_effect"] * (ecpm_b / 1000)), 0.0)
-        denom_rf = (loss_req + loss_fill) if (loss_req + loss_fill) > 0 else 1.0
-        req_share = loss_req / denom_rf * 100
-        fill_share = loss_fill / denom_rf * 100
+        # Inside impressions: split loss into Requests vs Fill using LOSS-causing portions only
+        # Requests effect & Fill effect are in impression units; convert to revenue-equivalent using baseline eCPM
+        ecpm_b = float(split["ecpm_b"])
+        loss_req_imp = max(-(split["req_effect"]), 0.0)
+        loss_fill_imp = max(-(split["fill_effect"]), 0.0)
+
+        loss_req_money = loss_req_imp * (ecpm_b / 1000)
+        loss_fill_money = loss_fill_imp * (ecpm_b / 1000)
+        denom_rf = (loss_req_money + loss_fill_money) if (loss_req_money + loss_fill_money) > 0 else 1.0
+
+        req_share = loss_req_money / denom_rf * 100
+        fill_share = loss_fill_money / denom_rf * 100
 
         inner = f"""
-        <div style="font-size:13px; font-weight:900; color:#334155;">Inside Impressions</div>
+        <div style="font-size:13px; font-weight:900; color:#334155;">Inside Impressions (loss-only)</div>
         <div style="margin-top:10px; display:flex; flex-direction:column; gap:8px;">
           <div><b>Requests:</b> {req_share:.0f}%</div>
           <div><b>Fill:</b> {fill_share:.0f}%</div>
@@ -615,7 +617,7 @@ with s3:
           <div><b>Today eCPM:</b> ${split['ecpm_t']:.2f}</div>
           <div><b>CTR:</b> {t['ctr']:.2f}% (diagnostic only)</div>
         </div>
-        <div class="small-note">To pinpoint eCPM drop, you’d segment by geo/device/ad unit.</div>
+        <div class="small-note">To pinpoint eCPM movement, segment by geo/device/ad unit.</div>
         """
     st.markdown(panel("Second-Level Driver", inner), unsafe_allow_html=True)
 
@@ -675,6 +677,7 @@ chart = alt.layer(bars, line_rpp, line_fill, line_ecpm).resolve_scale(
 
 st.altair_chart(chart, use_container_width=True)
 st.caption("All ratio metrics are derived from daily totals. Expected reference is baseline median totals (not averages of ratios).")
+
 st.write("")
 
 # =========================
