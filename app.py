@@ -1,29 +1,11 @@
-
 # app.py
 # Publisher Performance Dashboard (GA4 + GAM) — clean PowerBI-like
-#
-# ✅ FIXED (your issues):
-# 1) Raw HTML showing as text inside panels/chips/cards — FIXED using html() + panel() dedent/strip.
-# 2) Adds pipeline ratios WITHOUT collapsing UI (2 clean rows of mini-cards):
-#    - PV / Session
-#    - Requests / PV (already existed as requests_per_page)
-#    - Imp / PV
-#    - Imp / Session
-#    - Clicks / Session
-# 3) Adds your metrics:
-#    - "RPM" as Revenue per Session (shown as Rev / 1K Sessions for readability)
-#    - RPU as Revenue per User
-# 4) Expected + Delta logic remains SAME:
-#    - Expected totals = baseline median of totals (last N days excluding selected date)
-#    - Expected ratios derived from expected totals (never median of ratios)
-#    - Delta% = (Today - Expected) / Expected * 100
-# 5) Adds a single text-only label next to Status:
-#    - "Noise-like movement" vs "Statistically abnormal" (Z-score style, no numbers shown)
-#
-# IMPORTANT:
-# - Do NOT wrap this file in ```python in Streamlit; paste as-is in app.py.
-# - CSV must include: date, users, sessions, pageviews, ad_requests, impressions, clicks, revenue
-# - Optional: site_name
+# FIXES:
+# - Chips wrap properly (no overflow)
+# - "Why Revenue Missed" + "Second-Level Driver" always visible (text color fixed)
+# - UI stays clean (no collapse)
+# - Logic unchanged: Expected = baseline median of totals; ratios derived from totals; Delta = Today vs Expected
+# - Z-score text-only label: Noise-like vs Statistically abnormal
 
 import streamlit as st
 import pandas as pd
@@ -121,8 +103,20 @@ st.markdown(
   font-weight: 950;
   color:#0b1220;
 }
-.chips{ margin-top: 12px; display:flex; gap:10px; flex-wrap:wrap; }
+
+/* ✅ FIX: chips wrap properly + no overflow */
+.chips{
+  margin-top: 12px;
+  display:flex;
+  gap:10px;
+  flex-wrap:wrap;
+  align-items:flex-start;
+  max-width:100%;
+}
 .chip{
+  display:inline-flex;
+  align-items:center;
+  justify-content:center;
   padding: 8px 12px;
   border-radius: 10px;
   font-weight: 900;
@@ -130,12 +124,17 @@ st.markdown(
   border: 1px solid #e5e7eb;
   background:#f1f5f9;
   color:#0b1220;
+  white-space:nowrap;
+  line-height: 1;
 }
 .chip-green{ background:#dcfce7; border-color:#22c55e; }
 .chip-red{ background:#fee2e2; border-color:#ef4444; }
 .chip-amber{ background:#ffedd5; border-color:#f59e0b; }
 
+/* Text */
 .small-note{ font-size: 12px; color:#475569; font-weight: 650; margin-top: 8px; }
+.body-text{ font-size: 13px; font-weight: 850; color:#0b1220; line-height: 1.55; } /* ✅ FIX: readable text */
+.muted{ color:#475569; font-weight: 700; font-size: 12px; }
 hr.soft { border:none; height:1px; background:#e7eef7; margin: 12px 0; }
 </style>
 """,
@@ -143,7 +142,7 @@ hr.soft { border:none; height:1px; background:#e7eef7; margin: 12px 0; }
 )
 
 # =========================
-# HELPERS (correct math)
+# HELPERS
 # =========================
 def html(s: str) -> str:
     return textwrap.dedent(s).strip()
@@ -217,7 +216,7 @@ def panel(title, inner_html):
     """
 
 # =========================
-# Z-SCORE TEXT LABEL (no numbers shown)
+# Z-SCORE TEXT LABEL
 # =========================
 def z_label(value: float, baseline_series: pd.Series):
     s = pd.to_numeric(baseline_series, errors="coerce").dropna()
@@ -261,7 +260,7 @@ if "site_name" in df_raw.columns:
     site = st.sidebar.selectbox("Site", sites, index=0)
     df_raw = df_raw[df_raw["site_name"] == site].copy()
 
-# Required totals (GA4 + GAM)
+# Required totals
 base_cols = ["users", "sessions", "pageviews", "ad_requests", "impressions", "clicks", "revenue"]
 missing = [c for c in base_cols if c not in df_raw.columns]
 if missing:
@@ -271,22 +270,18 @@ if missing:
 for c in base_cols:
     df_raw[c] = pd.to_numeric(df_raw[c], errors="coerce").fillna(0.0)
 
-# Daily totals (ONLY totals are summed)
 daily = df_raw.groupby("date", as_index=False)[base_cols].sum().sort_values("date")
 
 # =========================
-# DERIVED METRICS (always from totals; never summed)
+# DERIVED METRICS
 # =========================
 daily["ecpm"] = daily.apply(lambda r: safe_div(r["revenue"], r["impressions"], 1000), axis=1)
 daily["fill_rate"] = daily.apply(lambda r: safe_div(r["impressions"], r["ad_requests"], 100), axis=1)
 daily["requests_per_page"] = daily.apply(lambda r: safe_div(r["ad_requests"], r["pageviews"], 1), axis=1)
 daily["ctr"] = daily.apply(lambda r: safe_div(r["clicks"], r["impressions"], 100), axis=1)
 
-# Your requested “RPM = revenue per session”
-# We display as Rev / 1K Sessions for readability (same metric scaled)
-daily["rev_per_1k_sessions"] = daily.apply(lambda r: safe_div(r["revenue"], r["sessions"], 1000), axis=1)
-
-# RPU = revenue per user
+# Your metrics
+daily["rev_per_1k_sessions"] = daily.apply(lambda r: safe_div(r["revenue"], r["sessions"], 1000), axis=1)  # RPM style
 daily["rpu"] = daily.apply(lambda r: safe_div(r["revenue"], r["users"], 1), axis=1)
 
 # Pipeline ratios
@@ -319,7 +314,7 @@ t = today_df.iloc[0].to_dict()
 baseline_df = daily[(daily["date"] < today) & (daily["date"] >= baseline_start)]
 
 # =========================
-# EXPECTED (baseline median of totals)
+# EXPECTED
 # =========================
 if baseline_df.empty:
     exp = {c: 0.0 for c in base_cols}
@@ -332,24 +327,21 @@ else:
     exp_tot = baseline_df[base_cols].median(numeric_only=True).to_dict()
     exp = dict(exp_tot)
 
-    # Expected ratios from expected totals (correct)
     exp["ecpm"] = safe_div(exp["revenue"], exp["impressions"], 1000)
     exp["fill_rate"] = safe_div(exp["impressions"], exp["ad_requests"], 100)
     exp["requests_per_page"] = safe_div(exp["ad_requests"], exp["pageviews"], 1)
     exp["ctr"] = safe_div(exp["clicks"], exp["impressions"], 100)
 
-    # Your metrics
     exp["rev_per_1k_sessions"] = safe_div(exp["revenue"], exp["sessions"], 1000)
     exp["rpu"] = safe_div(exp["revenue"], exp["users"], 1)
 
-    # Pipeline
     exp["pv_per_session"] = safe_div(exp["pageviews"], exp["sessions"], 1)
     exp["imp_per_page"] = safe_div(exp["impressions"], exp["pageviews"], 1)
     exp["imp_per_session"] = safe_div(exp["impressions"], exp["sessions"], 1)
     exp["clicks_per_session"] = safe_div(exp["clicks"], exp["sessions"], 1)
 
 # =========================
-# DELTA % (Today vs Expected)
+# DELTA %
 # =========================
 d = {}
 for k in [
@@ -360,7 +352,7 @@ for k in [
 ]:
     d[k] = pct_change(t.get(k, 0.0), exp.get(k, 0.0))
 
-# Z-score label (text-only) for revenue movement
+# Z-score label for revenue
 stat_flag = "Noise-like movement"
 if not baseline_df.empty:
     stat_flag = z_label(float(t["revenue"]), baseline_df["revenue"])
@@ -423,12 +415,6 @@ def root_cause_story(t, exp):
     ecpm_t = safe_div(rev_t, imp_t, 1000)
     ecpm_b = safe_div(rev_b, imp_b, 1000)
 
-    fill_t = safe_div(imp_t, req_t, 100) if req_t else 0.0
-    fill_b = safe_div(imp_b, req_b, 100) if req_b else 0.0
-
-    rpp_t = safe_div(req_t, float(t["pageviews"]), 1) if float(t["pageviews"]) else 0.0
-    rpp_b = safe_div(req_b, float(exp["pageviews"]), 1) if float(exp["pageviews"]) else 0.0
-
     # Revenue decomposition: Rev = Imp * eCPM / 1000
     d_rev = rev_t - rev_b
     imp_effect = (imp_t - imp_b) * (ecpm_b / 1000)
@@ -445,19 +431,15 @@ def root_cause_story(t, exp):
         conf = "Low"
 
     gap = rev_b - rev_t  # positive = missed
-    loss_imp = loss_ecpm = loss_res = 0.0
-    if gap > 0:
-        loss_imp = max(-(imp_effect), 0.0)
-        loss_ecpm = max(-(ecpm_effect), 0.0)
-        loss_res = max(-(residual), 0.0)
 
+    # ✅ FIX: compute miss-only split correctly (only negative contributors)
+    loss_imp = max(-(imp_effect), 0.0) if gap > 0 else 0.0
+    loss_ecpm = max(-(ecpm_effect), 0.0) if gap > 0 else 0.0
+    loss_res = max(-(residual), 0.0) if gap > 0 else 0.0
     denom_loss = (loss_imp + loss_ecpm + loss_res) if (loss_imp + loss_ecpm + loss_res) > 0 else 1.0
 
     split = {
         "gap": gap,
-        "loss_imp": loss_imp,
-        "loss_ecpm": loss_ecpm,
-        "loss_res": loss_res,
         "loss_imp_pct": (loss_imp / denom_loss * 100) if gap > 0 else 0.0,
         "loss_ecpm_pct": (loss_ecpm / denom_loss * 100) if gap > 0 else 0.0,
         "loss_res_pct": (loss_res / denom_loss * 100) if gap > 0 else 0.0,
@@ -466,12 +448,6 @@ def root_cause_story(t, exp):
         "residual": residual,
         "residual_ratio": residual_ratio,
         "conf": conf,
-        "fill_t": fill_t,
-        "fill_b": fill_b,
-        "rpp_t": rpp_t,
-        "rpp_b": rpp_b,
-        "ecpm_t": ecpm_t,
-        "ecpm_b": ecpm_b,
     }
 
     # Pipeline-based diagnosis
@@ -479,11 +455,13 @@ def root_cause_story(t, exp):
     rpp_t, rpp_b = float(t["requests_per_page"]), float(exp["requests_per_page"])
     imp_pv_t, imp_pv_b = float(t["imp_per_page"]), float(exp["imp_per_page"])
     ctr_t, ctr_b = float(t["ctr"]), float(exp["ctr"])
+    ecpm_t2, ecpm_b2 = float(t["ecpm"]), float(exp["ecpm"])
 
     pvps_down = pvps_b > 0 and pvps_t <= pvps_b * 0.90
     rpp_down = rpp_b > 0 and rpp_t <= rpp_b * 0.90
     imp_pv_down = imp_pv_b > 0 and imp_pv_t <= imp_pv_b * 0.90
     ctr_down = ctr_b > 0 and ctr_t <= ctr_b * 0.90
+    ecpm_down = ecpm_b2 > 0 and ecpm_t2 <= ecpm_b2 * 0.90
 
     chips = []
     story = []
@@ -501,22 +479,19 @@ def root_cause_story(t, exp):
     if (not pvps_down) and rpp_down:
         issue = "Tag / Ad-call Problem"
         chips = [("Requests/PV Down", "red"), ("PV/Session OK", "green")]
-        story.append("Engagement is stable but Requests per page dropped → ad calls missing (tag/CMP/template/adblock/lazy-load).")
+        story.append("Engagement is stable but Requests/PV dropped → ad calls missing (tag/CMP/template/adblock/lazy-load).")
         return issue, chips, story, split
 
     if (not rpp_down) and imp_pv_down:
         issue = "Demand / Fill Problem"
         chips = [("Imp/PV Down", "red"), ("Requests/PV OK", "green")]
-        story.append("Requests per page are present but impressions per page dropped → fill/demand/floors/blocks/policy/buyer loss.")
+        story.append("Requests/PV is present but Imp/PV dropped → fill/demand/floors/blocks/policy/buyer loss.")
         return issue, chips, story, split
 
-    # eCPM issue
-    ecpm_t, ecpm_b = float(t["ecpm"]), float(exp["ecpm"])
-    ecpm_down = ecpm_b > 0 and ecpm_t <= ecpm_b * 0.90
     if ecpm_down:
         issue = "Pricing / eCPM Problem"
         chips = [("eCPM Down", "red"), ("Delivery OK", "green")]
-        story.append("Delivery is stable but eCPM dropped → buyers are paying less per 1,000 impressions (mix/demand quality).")
+        story.append("Delivery is stable but eCPM dropped → buyers paying less per 1,000 impressions.")
         return issue, chips, story, split
 
     if ctr_down:
@@ -535,7 +510,7 @@ def root_cause_story(t, exp):
 issue_title, chips, story_lines, split = root_cause_story(t, exp)
 
 # =========================
-# MIDDLE ROW (Diagnosis + Key Metrics Overview)
+# MIDDLE ROW
 # =========================
 left, right = st.columns([1.2, 1.6], gap="large")
 
@@ -554,13 +529,13 @@ with left:
     conf = split["conf"]
     conf_color = "#16a34a" if conf == "High" else "#f59e0b" if conf == "Medium" else "#ef4444"
 
-    story_html = "<br/>".join([f"• {s}" for s in story_lines]) if story_lines else "<span class='small-note'>No story notes.</span>"
+    story_html = "<br/>".join([f"• {s}" for s in story_lines]) if story_lines else "• No story notes."
 
     inner = f"""
     <div class="diag-strip">Issue Detected: <span style="font-weight:950;">{issue_title}</span></div>
     <div class="chips">{chips_html}</div>
     <hr class="soft"/>
-    <div style="font-size:13px; font-weight:900; color:#0b1220; line-height:1.5;">{story_html}</div>
+    <div class="body-text">{story_html}</div>
     <div class="small-note"><b>Story confidence:</b> <span style="color:{conf_color}; font-weight:950;">{conf}</span>
     &nbsp; (Residual ratio {split['residual_ratio']:.2f})</div>
     """
@@ -610,16 +585,16 @@ with s1:
     inner = f"""
     <div style="display:flex; justify-content:space-between; gap:10px; align-items:baseline;">
       <div>
-        <div style="font-size:13px; font-weight:900; color:#334155;">Today vs Expected</div>
+        <div class="muted">Today vs Expected</div>
         <div style="font-size:36px; font-weight:950; color:#0b1220; margin-top:4px;">
           {"-" if gap > 0 else "+"}{abs(gap):,.0f}
         </div>
         <div class="small-note">Expected: ${float(exp['revenue']):,.0f} • Actual: ${float(t['revenue']):,.0f}</div>
       </div>
       <div style="text-align:right;">
-        <div style="font-size:13px; font-weight:900; color:#334155;">Status</div>
+        <div class="muted">Status</div>
         <div style="font-size:22px; font-weight:950; color:{status_color}; margin-top:4px;">{status}</div>
-        <div style="font-size:12px; font-weight:900; color:{stat_flag_color}; margin-top:4px;">{stat_flag}</div>
+        <div style="font-size:12px; font-weight:900; color:{stat_flag_color}; margin-top:6px;">{stat_flag}</div>
         <div class="small-note">Gap: {gap_pct:+.1f}%</div>
       </div>
     </div>
@@ -629,8 +604,8 @@ with s1:
 with s2:
     if gap > 0:
         inner = f"""
-        <div style="font-size:13px; font-weight:900; color:#334155;">Miss Split (loss-only)</div>
-        <div style="margin-top:10px; display:flex; flex-direction:column; gap:8px;">
+        <div class="muted">Miss Split (loss-only)</div>
+        <div class="body-text" style="margin-top:10px;">
           <div><b>Impressions:</b> {split['loss_imp_pct']:.0f}%</div>
           <div><b>eCPM:</b> {split['loss_ecpm_pct']:.0f}%</div>
           <div><b>Residual:</b> {split['loss_res_pct']:.0f}%</div>
@@ -639,43 +614,22 @@ with s2:
         """
     else:
         inner = """
-        <div style="font-size:13px; font-weight:900; color:#334155;">No miss vs Expected</div>
-        <div style="margin-top:10px; font-weight:900; color:#16a34a;">Revenue is at or above Expected baseline.</div>
+        <div class="muted">No miss vs Expected</div>
+        <div class="body-text" style="margin-top:10px; color:#16a34a;">Revenue is at or above Expected baseline.</div>
         """
     st.markdown(panel("Why Revenue Missed", inner), unsafe_allow_html=True)
 
 with s3:
-    if gap > 0:
-        imp_major = split["loss_imp"] >= split["loss_ecpm"]
-    else:
-        imp_major = abs(split["imp_effect"]) >= abs(split["ecpm_effect"])
-
-    if imp_major:
-        # Inside impressions: Requests vs Fill (using expected ecpm to convert to money)
-        ecpm_b = float(split["ecpm_b"])
-        # We infer request/fill shares by using pipeline drivers:
-        # Requests/Page vs Fill Rate are already captured in Diagnosis, but this panel stays as a context helper.
-        inner = f"""
-        <div style="font-size:13px; font-weight:900; color:#334155;">Pipeline Context</div>
-        <div style="margin-top:10px; display:flex; flex-direction:column; gap:8px;">
-          <div><b>PV/Session:</b> {t['pv_per_session']:.2f} (Δ {d['pv_per_session']:+.0f}%)</div>
-          <div><b>Requests/PV:</b> {t['requests_per_page']:.2f} (Δ {d['requests_per_page']:+.0f}%)</div>
-          <div><b>Imp/PV:</b> {t['imp_per_page']:.2f} (Δ {d['imp_per_page']:+.0f}%)</div>
-          <div><b>eCPM:</b> ${t['ecpm']:.2f} (Δ {d['ecpm']:+.0f}%)</div>
-        </div>
-        <div class="small-note">These ratios explain where delivery is breaking across the funnel.</div>
-        """
-    else:
-        inner = f"""
-        <div style="font-size:13px; font-weight:900; color:#334155;">eCPM Context</div>
-        <div style="margin-top:10px; display:flex; flex-direction:column; gap:8px;">
-          <div><b>Expected eCPM:</b> ${split['ecpm_b']:.2f}</div>
-          <div><b>Today eCPM:</b> ${split['ecpm_t']:.2f}</div>
-          <div><b>CTR:</b> {t['ctr']:.2f}%</div>
-          <div><b>Clicks/Session:</b> {t['clicks_per_session']:.4f}</div>
-        </div>
-        <div class="small-note">If eCPM dropped, segment by geo/device/ad unit to locate buyer mix shifts.</div>
-        """
+    inner = f"""
+    <div class="muted">Pipeline Context</div>
+    <div class="body-text" style="margin-top:10px;">
+      <div><b>PV/Session:</b> {t['pv_per_session']:.2f} (Δ {d['pv_per_session']:+.0f}%)</div>
+      <div><b>Requests/PV:</b> {t['requests_per_page']:.2f} (Δ {d['requests_per_page']:+.0f}%)</div>
+      <div><b>Imp/PV:</b> {t['imp_per_page']:.2f} (Δ {d['imp_per_page']:+.0f}%)</div>
+      <div><b>eCPM:</b> ${t['ecpm']:.2f} (Δ {d['ecpm']:+.0f}%)</div>
+    </div>
+    <div class="small-note">These ratios show where delivery is breaking across the funnel.</div>
+    """
     st.markdown(panel("Second-Level Driver", inner), unsafe_allow_html=True)
 
 st.write("")
