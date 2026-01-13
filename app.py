@@ -1,3 +1,4 @@
+```python
 import streamlit as st
 import pandas as pd
 import numpy as np
@@ -260,6 +261,11 @@ def zscore_label(value: float, baseline_series: pd.Series) -> str:
     z = (value - mu) / sd
     return "Statistically abnormal" if abs(z) >= 2 else "Noise-like movement"
 
+def fmt_money_exact(x: float) -> str:
+    # ✅ Shows exact value (no rounding to 0 decimals)
+    # If your GAM revenue is 159.4 it will show 159.40
+    return f"${float(x):,.2f}"
+
 # =========================
 # LOAD CSV
 # =========================
@@ -304,11 +310,8 @@ daily["fill_rate"] = daily.apply(lambda r: safe_div(r["impressions"], r["ad_requ
 daily["requests_per_page"] = daily.apply(lambda r: safe_div(r["ad_requests"], r["pageviews"], 1), axis=1)
 daily["ctr"] = daily.apply(lambda r: safe_div(r["clicks"], r["impressions"], 100), axis=1)
 
-# Pipeline ratios
+# Pipeline ratios (only needed for diagnosis + second-level panel)
 daily["pv_per_session"] = daily.apply(lambda r: safe_div(r["pageviews"], r["sessions"], 1), axis=1)
-daily["imp_per_page"] = daily.apply(lambda r: safe_div(r["impressions"], r["pageviews"], 1), axis=1)
-daily["imp_per_session"] = daily.apply(lambda r: safe_div(r["impressions"], r["sessions"], 1), axis=1)
-daily["clicks_per_session"] = daily.apply(lambda r: safe_div(r["clicks"], r["sessions"], 1), axis=1)
 
 # RPM + RPU (your definitions)
 daily["rpm"] = daily.apply(lambda r: safe_div(r["revenue"], r["sessions"], 1000), axis=1)  # Rev per 1K sessions
@@ -344,7 +347,7 @@ if baseline_df.empty:
     exp = {c: 0.0 for c in base_cols}
     exp.update({
         "ecpm": 0.0, "fill_rate": 0.0, "requests_per_page": 0.0, "ctr": 0.0,
-        "pv_per_session": 0.0, "imp_per_page": 0.0, "imp_per_session": 0.0, "clicks_per_session": 0.0,
+        "pv_per_session": 0.0,
         "rpm": 0.0, "rpu": 0.0,
     })
 else:
@@ -358,10 +361,6 @@ else:
     exp["ctr"] = safe_div(exp["clicks"], exp["impressions"], 100)
 
     exp["pv_per_session"] = safe_div(exp["pageviews"], exp["sessions"], 1)
-    exp["imp_per_page"] = safe_div(exp["impressions"], exp["pageviews"], 1)
-    exp["imp_per_session"] = safe_div(exp["impressions"], exp["sessions"], 1)
-    exp["clicks_per_session"] = safe_div(exp["clicks"], exp["sessions"], 1)
-
     exp["rpm"] = safe_div(exp["revenue"], exp["sessions"], 1000)
     exp["rpu"] = safe_div(exp["revenue"], exp["users"], 1)
 
@@ -369,9 +368,9 @@ else:
 d = {}
 for k in [
     "revenue", "ecpm", "fill_rate", "requests_per_page",
-    "users", "sessions", "pageviews", "ad_requests", "impressions", "clicks",
-    "rpm", "rpu", "ctr",
-    "pv_per_session", "imp_per_page", "imp_per_session", "clicks_per_session",
+    "users", "sessions", "pageviews", "ad_requests", "impressions",
+    "rpm", "rpu",
+    "pv_per_session",
 ]:
     d[k] = pct_change(t.get(k, 0.0), exp.get(k, 0.0))
 
@@ -400,7 +399,8 @@ st.write("")
 # =========================
 c1, c2, c3, c4 = st.columns([1, 1, 1, 1.35], gap="large")
 with c1:
-    st.markdown(kpi_card("Revenue", f"${t['revenue']:,.0f}", d["revenue"]), unsafe_allow_html=True)
+    # ✅ exact revenue (no 0-dec rounding)
+    st.markdown(kpi_card("Revenue", fmt_money_exact(t["revenue"]), d["revenue"]), unsafe_allow_html=True)
 with c2:
     st.markdown(kpi_card("eCPM", f"${t['ecpm']:.2f}", d["ecpm"]), unsafe_allow_html=True)
 with c3:
@@ -427,7 +427,7 @@ with c4:
 st.write("")
 
 # =========================
-# PIPELINE DIAGNOSIS
+# PIPELINE DIAGNOSIS (clean)
 # =========================
 def pipeline_diagnosis(t, exp):
     chips = []
@@ -435,7 +435,7 @@ def pipeline_diagnosis(t, exp):
 
     gap = float(exp["revenue"]) - float(t["revenue"])
     if gap > 0:
-        story.append(f"Today missed expected revenue by ${gap:,.0f} (Expected baseline median).")
+        story.append(f"Today missed expected revenue by {fmt_money_exact(gap)} (Expected baseline median).")
     else:
         story.append("Revenue is at/above Expected baseline for this day.")
 
@@ -443,35 +443,35 @@ def pipeline_diagnosis(t, exp):
     sessions_down = exp["sessions"] > 0 and t["sessions"] <= exp["sessions"] * 0.90
     pvps_down = exp["pv_per_session"] > 0 and t["pv_per_session"] <= exp["pv_per_session"] * 0.90
     rpp_down = exp["requests_per_page"] > 0 and t["requests_per_page"] <= exp["requests_per_page"] * 0.90
-    imp_pv_down = exp["imp_per_page"] > 0 and t["imp_per_page"] <= exp["imp_per_page"] * 0.90
+    fill_down = exp["fill_rate"] > 0 and t["fill_rate"] <= exp["fill_rate"] * 0.90
     ecpm_down = exp["ecpm"] > 0 and t["ecpm"] <= exp["ecpm"] * 0.90
 
     if users_down or sessions_down:
         issue = "Traffic Problem"
         if users_down: chips.append(("Users Down", "red"))
         if sessions_down: chips.append(("Sessions Down", "red"))
-        story.append("Traffic dropped → fewer sessions and pageviews → fewer ad opportunities.")
+        story.append("Traffic dropped → fewer sessions/pageviews → fewer ad opportunities.")
         return issue, chips, story
 
     if pvps_down:
         issue = "Engagement Problem"
         chips.append(("PV/Session Down", "red"))
-        chips.append(("Fewer pages per visit", "amber"))
-        story.append("Users are visiting fewer pages per session → fewer ad slots exposed per visit.")
+        chips.append(("Fewer pages/visit", "amber"))
+        story.append("Engagement dropped → fewer pageviews per session → fewer ad exposures per visit.")
         return issue, chips, story
 
     if rpp_down:
         issue = "Tag / Ad-call Problem"
         chips.append(("Requests/PV Down", "red"))
-        chips.append(("Check tags / CMP", "amber"))
-        story.append("Pageviews are present but ad requests per pageview dropped → missing ad calls (tag/template/lazyload/CMP/adblock).")
+        chips.append(("Check tags/CMP", "amber"))
+        story.append("Pageviews are present but requests per pageview dropped → missing ad calls (tag/template/lazyload/CMP/adblock).")
         return issue, chips, story
 
-    if imp_pv_down:
+    if fill_down:
         issue = "Demand / Fill Problem"
-        chips.append(("Imp/PV Down", "red"))
+        chips.append(("Fill Rate Down", "red"))
         chips.append(("Requests OK", "green"))
-        story.append("Requests exist but impressions per page dropped → fill/demand/floors/blocks/policy/buyer loss.")
+        story.append("Requests exist but fill dropped → demand/floors/blocks/policy/buyer loss.")
         return issue, chips, story
 
     if ecpm_down:
@@ -489,7 +489,7 @@ def pipeline_diagnosis(t, exp):
 issue_title, chips, story_lines = pipeline_diagnosis(t, exp)
 
 # =========================
-# MIDDLE ROW (Diagnosis + Key Metrics)
+# MIDDLE ROW (Diagnosis + CLEAN Key Metrics)
 # =========================
 left, right = st.columns([1.2, 1.6], gap="large")
 
@@ -517,23 +517,29 @@ with left:
     st.markdown(panel("Diagnosis", inner), unsafe_allow_html=True)
 
 with right:
-    # ✅ FIX: use 4 columns grid so it never overlaps on small widths
+    # ✅ CLEANED: removed Clicks / Clicks per Session / Imp per PV / Imp per Session
     inner = f"""
     <div style="display:grid; grid-template-columns: repeat(4, 1fr); gap: 14px;">
       {mini_card("Users", fmt_compact(t["users"]), d["users"])}
       {mini_card("Sessions", fmt_compact(t["sessions"]), d["sessions"])}
       {mini_card("Pageviews", fmt_compact(t["pageviews"]), d["pageviews"])}
-      {mini_card("Ad Requests", fmt_compact(t["ad_requests"]), d["ad_requests"])}
-      {mini_card("RPM (Rev/1K Sessions)", f"${t['rpm']:.2f}", d["rpm"])}
-      {mini_card("RPU (Rev/User)", f"${t['rpu']:.2f}", d["rpu"])}
       {mini_card("PV / Session", f"{t['pv_per_session']:.2f}", d["pv_per_session"])}
+
+      {mini_card("Ad Requests", fmt_compact(t["ad_requests"]), d["ad_requests"])}
       {mini_card("Requests / PV", f"{t['requests_per_page']:.2f}", d["requests_per_page"])}
-      {mini_card("Imp / PV", f"{t['imp_per_page']:.2f}", d["imp_per_page"])}
-      {mini_card("Imp / Session", f"{t['imp_per_session']:.2f}", d["imp_per_session"])}
-      {mini_card("Clicks", fmt_compact(t["clicks"]), d["clicks"])}
-      {mini_card("Clicks / Session", f"{t['clicks_per_session']:.4f}", d["clicks_per_session"])}
+      {mini_card("Fill Rate", f"{t['fill_rate']:.0f}%", d["fill_rate"])}
+      {mini_card("eCPM", f"${t['ecpm']:.2f}", d["ecpm"])}
+
+      {mini_card("RPM (Rev/1K Sessions)", f"${t['rpm']:.2f}", d["rpm"])}
+      {mini_card("RPU (Rev/User)", f"${t['rpu']:.4f}", d["rpu"])}
+      {mini_card("Revenue", fmt_money_exact(t["revenue"]), d["revenue"])}
+      {mini_card("Ad Impressions", fmt_compact(t["impressions"]), d["impressions"])}
     </div>
-    <div class="small-note">All deltas are vs <b>Expected baseline median</b> (totals median; ratios derived from totals).</div>
+
+    <div class="small-note">
+      Clean funnel view only: Traffic → Engagement → Ad Opportunities → Delivery → Price → Money.<br/>
+      All deltas are vs <b>Expected baseline median</b> (totals median; ratios derived from totals).
+    </div>
     """
     st.markdown(panel("Key Metrics Overview", inner), unsafe_allow_html=True)
 
@@ -555,9 +561,9 @@ with s1:
       <div>
         <div style="font-size:13px; font-weight:900; color:#334155;">Today vs Expected</div>
         <div style="font-size:36px; font-weight:950; color:#0b1220; margin-top:4px;">
-          {"-" if gap > 0 else "+"}{abs(gap):,.0f}
+          {"-" if gap > 0 else "+"}{abs(gap):,.2f}
         </div>
-        <div class="small-note">Expected: ${float(exp['revenue']):,.0f} • Actual: ${float(t['revenue']):,.0f}</div>
+        <div class="small-note">Expected: {fmt_money_exact(exp['revenue'])} • Actual: {fmt_money_exact(t['revenue'])}</div>
       </div>
       <div style="text-align:right;">
         <div style="font-size:13px; font-weight:900; color:#334155;">Status</div>
@@ -570,7 +576,6 @@ with s1:
     st.markdown(panel("Loss Meter", inner), unsafe_allow_html=True)
 
 with s2:
-    # ✅ FIX: pure HTML (no backticks) so it never prints raw code
     if gap > 0:
         imp_b = float(exp["impressions"])
         imp_t = float(t["impressions"])
@@ -608,7 +613,7 @@ with s3:
     <div style="margin-top:10px; font-size:13px; font-weight:850; color:#0b1220; line-height:1.7;">
       <div><b>PV/Session:</b> {t['pv_per_session']:.2f} (Δ {d['pv_per_session']:+.0f}%)</div>
       <div><b>Requests/PV:</b> {t['requests_per_page']:.2f} (Δ {d['requests_per_page']:+.0f}%)</div>
-      <div><b>Imp/PV:</b> {t['imp_per_page']:.2f} (Δ {d['imp_per_page']:+.0f}%)</div>
+      <div><b>Fill Rate:</b> {t['fill_rate']:.0f}% (Δ {d['fill_rate']:+.0f}%)</div>
       <div><b>eCPM:</b> ${t['ecpm']:.2f} (Δ {d['ecpm']:+.0f}%)</div>
     </div>
     <div class="small-note">These ratios show where delivery is breaking across the funnel.</div>
@@ -640,6 +645,7 @@ bars = base.mark_bar(opacity=0.9).encode(
         alt.Tooltip("ecpm:Q", title="eCPM", format="$.2f"),
         alt.Tooltip("rpm:Q", title="RPM (Rev/1K Sessions)", format="$.2f"),
         alt.Tooltip("rpu:Q", title="RPU (Rev/User)", format="$.4f"),
+        alt.Tooltip("revenue:Q", title="Revenue", format="$.2f"),
     ],
 )
 
@@ -682,6 +688,8 @@ if t["sessions"] > 0 and t["pageviews"] == 0:
     checks.append("Sessions > 0 but Pageviews = 0 → GA4 pull may be incomplete for this day.")
 if t["pageviews"] > 0 and t["ad_requests"] == 0:
     checks.append("Pageviews > 0 but Ad Requests = 0 → tag/ad-call issue OR GAM data missing.")
+if t["pageviews"] > 0 and t["ad_requests"] == 0:
+    checks.append("Pageviews > 0 but Ad Requests = 0 → tag/ad-call issue OR GAM data missing.")
 if t["ad_requests"] > 0 and t["impressions"] == 0:
     checks.append("Ad Requests > 0 but Impressions = 0 → fill collapsed OR GAM reporting lag.")
 if t["impressions"] > 0 and t["revenue"] == 0:
@@ -693,3 +701,4 @@ if checks:
     st.markdown(panel("Sanity Checks", "<br/>".join([f"• {c}" for c in checks])), unsafe_allow_html=True)
 else:
     st.markdown(panel("Sanity Checks", "<span class='small-note'>No obvious integrity red flags for selected day.</span>"), unsafe_allow_html=True)
+```
