@@ -504,43 +504,71 @@ with s1:
     st.markdown(panel("Loss Meter", inner), unsafe_allow_html=True)
 
 with s2:
-    # ✅ FIXED: always shows proper HTML + chips (no raw <div>)
     if gap > 0:
         imp_b = float(exp["impressions"])
         imp_t = float(t["impressions"])
         ecpm_b = float(exp["ecpm"])
         ecpm_t = float(t["ecpm"])
 
-        # revenue decomposition (same base logic)
         imp_effect = (imp_t - imp_b) * (ecpm_b / 1000.0)
         ecpm_effect = imp_t * ((ecpm_t - ecpm_b) / 1000.0)
         residual = (float(t["revenue"]) - float(exp["revenue"])) - (imp_effect + ecpm_effect)
 
-        # loss-only parts
         loss_imp = max(-imp_effect, 0.0)
         loss_ecpm = max(-ecpm_effect, 0.0)
         loss_res = max(-residual, 0.0)
 
-        denom = (loss_imp + loss_ecpm + loss_res) if (loss_imp + loss_ecpm + loss_res) > 0 else 1.0
-        p_imp = loss_imp / denom * 100
-        p_ecpm = loss_ecpm / denom * 100
-        p_res = loss_res / denom * 100
+        denom = (loss_imp + loss_ecpm + loss_res)
+        if denom <= 0:
+            p_imp = p_ecpm = p_res = 0.0
+        else:
+            p_imp = (loss_imp / denom) * 100
+            p_ecpm = (loss_ecpm / denom) * 100
+            p_res = (loss_res / denom) * 100
 
-        inner = f"""
-        <div class="body-text">Miss Split (loss-only)</div>
-        <div class="miss-chips">
-          <div class="miss-chip miss-chip-imp">Impressions: {p_imp:.0f}%</div>
-          <div class="miss-chip miss-chip-ecpm">eCPM: {p_ecpm:.0f}%</div>
-          <div class="miss-chip miss-chip-res">Residual: {p_res:.0f}%</div>
-        </div>
-        <div class="small-note">Only the components that explain the revenue miss.</div>
-        """
+        # ✅ Streamlit-native rendering (no HTML render bugs)
+        st.markdown(
+            """
+            <div class="panel">
+              <div class="panel-title">Why Revenue Missed</div>
+            """,
+            unsafe_allow_html=True,
+        )
+
+        st.markdown("<div class='body-text'>Miss Split (loss-only)</div>", unsafe_allow_html=True)
+
+        cA, cB, cC = st.columns(3)
+        with cA:
+            st.markdown(
+                f"<div class='miss-chip miss-chip-imp'>Impressions: {p_imp:.0f}%</div>",
+                unsafe_allow_html=True,
+            )
+        with cB:
+            st.markdown(
+                f"<div class='miss-chip miss-chip-ecpm'>eCPM: {p_ecpm:.0f}%</div>",
+                unsafe_allow_html=True,
+            )
+        with cC:
+            st.markdown(
+                f"<div class='miss-chip miss-chip-res'>Residual: {p_res:.0f}%</div>",
+                unsafe_allow_html=True,
+            )
+
+        st.markdown("<div class='small-note'>Only the components that explain the revenue miss.</div>", unsafe_allow_html=True)
+
+        st.markdown("</div>", unsafe_allow_html=True)
+
     else:
-        inner = """
-        <div style="font-size:13px; font-weight:900; color:#16a34a;">Revenue is at/above Expected baseline.</div>
-        <div class="small-note">No miss to explain for this date.</div>
-        """
-    st.markdown(panel("Why Revenue Missed", inner), unsafe_allow_html=True)
+        st.markdown(
+            """
+            <div class="panel">
+              <div class="panel-title">Why Revenue Missed</div>
+              <div style="font-size:13px; font-weight:900; color:#16a34a;">Revenue is at/above Expected baseline.</div>
+              <div class="small-note">No miss to explain for this date.</div>
+            </div>
+            """,
+            unsafe_allow_html=True,
+        )
 
 with s3:
     inner = f"""
