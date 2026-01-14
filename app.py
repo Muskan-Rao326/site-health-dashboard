@@ -597,16 +597,17 @@ expected_ecpm = float(exp.get("ecpm", 0.0))
 driver = "delivery (impressions)" if abs(d["impressions"]) > abs(d["ecpm"]) else "price (eCPM)"
 insight_line = f"Last 7 days view: Revenue is {'down' if d['revenue'] < 0 else 'up'} vs baseline. Main signal: {driver}. (Δ {d['revenue']:+.1f}%)"
 
+# --- Last 7 Days View panel (SAFE render) ---
+st.markdown('<div class="panel">', unsafe_allow_html=True)
+st.markdown('<div class="panel-title">Last 7 Days View</div>', unsafe_allow_html=True)
+
+st.markdown(f"<div class='small-note'>{insight_line}</div>", unsafe_allow_html=True)
 st.markdown(
-    panel(
-        "Last 7 Days View",
-        f"""
-        <div class="small-note">{insight_line}</div>
-        <div class="small-note">Revenue chart is separate from Fill Rate and eCPM so it stays readable.</div>
-        """,
-    ),
-    unsafe_allow_html=True,
+    "<div class='small-note'>Revenue chart is separate from Fill Rate and eCPM so it stays readable.</div>",
+    unsafe_allow_html=True
 )
+
+st.markdown("</div>", unsafe_allow_html=True)
 
 # Revenue chart
 rev = alt.Chart(last7).encode(
