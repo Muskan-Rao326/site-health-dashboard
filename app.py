@@ -46,32 +46,43 @@ st.markdown(
 }
 
 /* KPI cards */
+/* KPI cards */
 .kpi-card{
   background:#ffffff;
   border: 1px solid #e7eef7;
   border-radius: 12px;
   padding: 14px 16px;
   box-shadow: 0 6px 16px rgba(15,23,42,0.06);
-  height: 120px;
-}
-.kpi-label{ font-size: 14px; font-weight: 800; color:#0f172a; opacity: 0.85; }
-.kpi-value{ margin-top: 6px; font-size: 40px; font-weight: 950; color:#0b1220; line-height: 1.05; }
 
-/* ✅ NEW: 2 small badges row inside KPI */
+  /* ✅ FIX: was height:120px (cut ho raha tha) */
+  height: auto;
+  min-height: 120px;
+}
+
+.kpi-label{ font-size: 14px; font-weight: 800; color:#0f172a; opacity: 0.85; }
+
+/* slightly smaller so badges fit */
+.kpi-value{ margin-top: 6px; font-size: 38px; font-weight: 950; color:#0b1220; line-height: 1.05; }
+
+/* badges row */
 .kpi-badges{
   margin-top: 10px;
   display:flex;
   gap:8px;
-  flex-wrap:wrap;
+  flex-wrap: nowrap;     /* ✅ keep side-by-side */
+  align-items:center;
 }
+
 .kpi-badge{
   display:inline-block;
-  padding: 6px 10px;
+  padding: 6px 10px;     /* ✅ smaller */
   border-radius: 8px;
-  font-size: 12px;
+  font-size: 12px;       /* ✅ smaller */
   font-weight: 900;
   color:#fff;
+  white-space: nowrap;   /* ✅ no wrap inside badge */
 }
+
 
 .badge-red{ background:#d9534f; }
 .badge-green{ background:#16a34a; }
@@ -242,6 +253,7 @@ def kpi_card(label, value_str, delta_baseline_pct, delta_yday_pct):
       </div>
     </div>
     """
+
 
 def mini_card(label, value_str, delta_pct):
     mag = min(abs(delta_pct) / 40.0, 1.0)
@@ -636,16 +648,18 @@ expected_ecpm = float(exp.get("ecpm", 0.0))
 driver = "delivery (impressions)" if abs(d["impressions"]) > abs(d["ecpm"]) else "price (eCPM)"
 insight_line = f"Last 7 days view: Revenue is {'down' if d['revenue'] < 0 else 'up'} vs baseline. Main signal: {driver}. (Δ {d['revenue']:+.1f}%)"
 
+# --- Last 7 Days View panel (SAFE render) ---
+st.markdown('<div class="panel">', unsafe_allow_html=True)
+st.markdown('<div class="panel-title">Last 7 Days View</div>', unsafe_allow_html=True)
+
+st.markdown(f"<div class='small-note'>{insight_line}</div>", unsafe_allow_html=True)
 st.markdown(
-    panel(
-        "Last 7 Days View",
-        f"""
-        <div class="small-note">{insight_line}</div>
-        <div class="small-note">Revenue chart is separate from Fill Rate and eCPM so it stays readable.</div>
-        """,
-    ),
-    unsafe_allow_html=True,
+    "<div class='small-note'>Revenue chart is separate from Fill Rate and eCPM so it stays readable.</div>",
+    unsafe_allow_html=True
 )
+
+st.markdown("</div>", unsafe_allow_html=True)
+
 
 # Revenue chart
 rev = alt.Chart(last7).encode(
