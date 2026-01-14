@@ -183,6 +183,8 @@ def safe_div(n, d, mult=1.0):
     return (n / d) * mult if d and d != 0 else 0.0
 
 def pct_change(new, old):
+    new = float(new)
+    old = float(old)
     if old == 0:
         return 0.0 if new == 0 else -100.0
     return (new - old) / old * 100.0
@@ -285,7 +287,7 @@ if "site_name" in df_raw.columns:
     df_raw = df_raw[df_raw["site_name"] == site].copy()
 
 # Required totals
-base_cols = ["users", "sessions", "pageviews", "ad_requests", "impressions", "clicks", "revenue"]
+base_cols = ["users", "sessions", "pageviews", "ad_requests", "impressions", "revenue"]
 missing = [c for c in base_cols if c not in df_raw.columns]
 if missing:
     st.error(f"Missing columns in CSV: {missing}")
@@ -301,7 +303,7 @@ daily = df_raw.groupby("date", as_index=False)[base_cols].sum().sort_values("dat
 daily["ecpm"] = daily.apply(lambda r: safe_div(r["revenue"], r["impressions"], 1000), axis=1)
 daily["fill_rate"] = daily.apply(lambda r: safe_div(r["impressions"], r["ad_requests"], 100), axis=1)
 
-# RPM + RPU (your definitions)
+# RPM + RPU
 daily["rpm"] = daily.apply(lambda r: safe_div(r["revenue"], r["sessions"], 1000), axis=1)  # Rev per 1K sessions
 daily["rpu"] = daily.apply(lambda r: safe_div(r["revenue"], r["users"], 1), axis=1)        # Rev per user
 
@@ -341,7 +343,6 @@ else:
     exp_tot = baseline_df[base_cols].median(numeric_only=True).to_dict()
     exp = dict(exp_tot)
 
-    # expected ratios derived from expected totals
     exp["ecpm"] = safe_div(exp["revenue"], exp["impressions"], 1000)
     exp["fill_rate"] = safe_div(exp["impressions"], exp["ad_requests"], 100)
     exp["rpm"] = safe_div(exp["revenue"], exp["sessions"], 1000)
@@ -351,7 +352,7 @@ else:
 # Deltas vs Expected
 d = {}
 for k in ["revenue", "ecpm", "fill_rate", "ad_requests", "users", "sessions", "pageviews", "impressions", "rpm", "rpu"]:
-    d[k] = pct_change(float(t.get(k, 0.0)), float(exp.get(k, 0.0)))
+    d[k] = pct_change(t.get(k, 0.0), exp.get(k, 0.0))
 
 # Z-score label (revenue)
 noise_label = "Noise-like movement"
@@ -420,7 +421,7 @@ def pipeline_diagnosis(t, exp):
 
     issue = "Delivery / Price Check"
     chips.append(("Traffic OK", "green"))
-    story.append("Next step: validate fill rate + eCPM movement for delivery/price impact.")
+    story.append("Next: validate Fill Rate + eCPM movement for delivery/price impact.")
     return issue, chips, story
 
 issue_title, chips, story_lines = pipeline_diagnosis(t, exp)
@@ -454,7 +455,7 @@ with left:
     st.markdown(panel("Diagnosis", inner), unsafe_allow_html=True)
 
 with right:
-    # ✅ ONLY 6 chips (2 rows): Users, Sessions, Pageviews, Impressions, RPM, RPU
+    # ✅ ONLY 6 metrics (clean, 2 rows)
     inner = f"""
     <div style="display:grid; grid-template-columns: repeat(3, 1fr); gap: 14px;">
       {mini_card("Users", fmt_compact(t["users"]), d["users"])}
@@ -465,8 +466,7 @@ with right:
       {mini_card("RPU (Rev/User)", f"${float(t['rpu']):.4f}", d["rpu"])}
     </div>
     <div class="small-note">
-      Clean funnel view: Traffic → Engagement → Ad Opportunities → Delivery → Price → Money.
-      <br/>All deltas are vs <b>Expected baseline median</b> (totals median; ratios derived from totals).
+      All deltas are vs <b>Expected baseline median</b> (totals median; ratios derived from totals).
     </div>
     """
     st.markdown(panel("Key Metrics Overview", inner), unsafe_allow_html=True)
@@ -504,6 +504,7 @@ with s1:
     st.markdown(panel("Loss Meter", inner), unsafe_allow_html=True)
 
 with s2:
+    # ✅ FIXED: Why Revenue Missed as pure Streamlit chips (no raw HTML block)
     if gap > 0:
         imp_b = float(exp["impressions"])
         imp_t = float(t["impressions"])
@@ -518,7 +519,7 @@ with s2:
         loss_ecpm = max(-ecpm_effect, 0.0)
         loss_res = max(-residual, 0.0)
 
-        denom = (loss_imp + loss_ecpm + loss_res)
+        denom = loss_imp + loss_ecpm + loss_res
         if denom <= 0:
             p_imp = p_ecpm = p_res = 0.0
         else:
@@ -526,117 +527,89 @@ with s2:
             p_ecpm = (loss_ecpm / denom) * 100
             p_res = (loss_res / denom) * 100
 
-        # ✅ Streamlit-native rendering (no HTML render bugs)
-        st.markdown(
-            """
-            <div class="panel">
-              <div class="panel-title">Why Revenue Missed</div>
-            """,
-            unsafe_allow_html=True,
-        )
-
-        st.markdown("<div class='body-text'>Miss Split (loss-only)</div>", unsafe_allow_html=True)
-
-        cA, cB, cC = st.columns(3)
-        with cA:
-            st.markdown(
-                f"<div class='miss-chip miss-chip-imp'>Impressions: {p_imp:.0f}%</div>",
-                unsafe_allow_html=True,
-            )
-        with cB:
-            st.markdown(
-                f"<div class='miss-chip miss-chip-ecpm'>eCPM: {p_ecpm:.0f}%</div>",
-                unsafe_allow_html=True,
-            )
-        with cC:
-            st.markdown(
-                f"<div class='miss-chip miss-chip-res'>Residual: {p_res:.0f}%</div>",
-                unsafe_allow_html=True,
-            )
-
-        st.markdown("<div class='small-note'>Only the components that explain the revenue miss.</div>", unsafe_allow_html=True)
-
-        st.markdown("</div>", unsafe_allow_html=True)
-
+        inner = f"""
+        <div class="body-text">Miss Split (loss-only)</div>
+        <div class="miss-chips">
+          <div class="miss-chip miss-chip-imp">Impressions: {p_imp:.0f}%</div>
+          <div class="miss-chip miss-chip-ecpm">eCPM: {p_ecpm:.0f}%</div>
+          <div class="miss-chip miss-chip-res">Residual: {p_res:.0f}%</div>
+        </div>
+        <div class="small-note">Only the components that explain the revenue miss.</div>
+        """
+        st.markdown(panel("Why Revenue Missed", inner), unsafe_allow_html=True)
     else:
-        st.markdown(
-            """
-            <div class="panel">
-              <div class="panel-title">Why Revenue Missed</div>
-              <div style="font-size:13px; font-weight:900; color:#16a34a;">Revenue is at/above Expected baseline.</div>
-              <div class="small-note">No miss to explain for this date.</div>
-            </div>
-            """,
-            unsafe_allow_html=True,
-        )
+        inner = """
+        <div style="font-size:13px; font-weight:900; color:#16a34a;">Revenue is at/above Expected baseline.</div>
+        <div class="small-note">No miss to explain for this date.</div>
+        """
+        st.markdown(panel("Why Revenue Missed", inner), unsafe_allow_html=True)
 
 with s3:
     inner = f"""
-    <div class="body-text">Second-Level Driver</div>
-    <div class="small-note">
-      Quick context: if Revenue dropped, it’s always some mix of
-      <b>Delivery</b> (Impressions) and <b>Price</b> (eCPM).
-    </div>
+    <div class="body-text">Pipeline Context</div>
     <div style="margin-top:10px; font-size:13px; font-weight:850; color:#0b1220; line-height:1.7;">
       <div><b>Impressions:</b> {fmt_compact(t['impressions'])} (Δ {d['impressions']:+.0f}%)</div>
       <div><b>Fill Rate:</b> {float(t['fill_rate']):.0f}% (Δ {d['fill_rate']:+.0f}%)</div>
       <div><b>eCPM:</b> ${float(t['ecpm']):.2f} (Δ {d['ecpm']:+.0f}%)</div>
     </div>
+    <div class="small-note">Delivery vs Price context for revenue movement.</div>
     """
     st.markdown(panel("Second-Level Driver", inner), unsafe_allow_html=True)
 
 st.write("")
 
 # =========================
-# REVENUE BREAKDOWN CHART (Last 7 days)
+# CLEAN TREND CHART (Last 7 days) - readable
 # =========================
-st.markdown(panel("Revenue Breakdown (Last 7 days)", ""), unsafe_allow_html=True)
+st.markdown(panel("7-Day Trend (Revenue + Fill + eCPM)", ""), unsafe_allow_html=True)
 
 last7 = daily[daily["date"] <= today].tail(7).copy()
-last7["dow"] = last7["date"].dt.day_name().str.slice(0, 3)
+if len(last7) > 0:
+    last7["date_str"] = last7["date"].dt.strftime("%d %b")
 
-base = alt.Chart(last7).encode(
-    x=alt.X("dow:N", sort=list(last7["dow"]), title=None)
-)
+    # Revenue bars
+    bars = alt.Chart(last7).mark_bar(opacity=0.9).encode(
+        x=alt.X("date_str:N", title=None, sort=list(last7["date_str"])),
+        y=alt.Y("revenue:Q", title="Revenue ($)"),
+        tooltip=[
+            alt.Tooltip("date:T", title="Date"),
+            alt.Tooltip("revenue:Q", title="Revenue", format="$.2f"),
+            alt.Tooltip("ad_requests:Q", title="Ad Requests", format=","),
+            alt.Tooltip("impressions:Q", title="Impressions", format=","),
+            alt.Tooltip("fill_rate:Q", title="Fill Rate", format=",.1f"),
+            alt.Tooltip("ecpm:Q", title="eCPM", format="$.2f"),
+        ],
+    )
 
-bars = base.mark_bar(opacity=0.9).encode(
-    y=alt.Y("pageviews:Q", title=None),
-    color=alt.value("#1f77ff"),
-    tooltip=[
-        alt.Tooltip("date:T", title="Date"),
-        alt.Tooltip("pageviews:Q", title="Pageviews", format=","),
-        alt.Tooltip("ad_requests:Q", title="Ad Requests", format=","),
-        alt.Tooltip("fill_rate:Q", title="Fill Rate %", format=",.1f"),
-        alt.Tooltip("ecpm:Q", title="eCPM", format="$.2f"),
-        alt.Tooltip("revenue:Q", title="Revenue", format="$.2f"),
-    ],
-)
+    # Fill + eCPM lines
+    line_fill = alt.Chart(last7).mark_line(point=True, strokeWidth=3).encode(
+        x=alt.X("date_str:N", sort=list(last7["date_str"]), title=None),
+        y=alt.Y("fill_rate:Q", title="Fill Rate (%)"),
+        tooltip=[alt.Tooltip("fill_rate:Q", title="Fill Rate", format=",.1f")],
+    )
 
-line_fill = base.mark_line(point=True, strokeWidth=3).encode(
-    y=alt.Y("fill_rate:Q", title=None),
-    color=alt.value("#22c55e"),
-)
+    line_ecpm = alt.Chart(last7).mark_line(point=True, strokeWidth=3).encode(
+        x=alt.X("date_str:N", sort=list(last7["date_str"]), title=None),
+        y=alt.Y("ecpm:Q", title="eCPM ($)"),
+        tooltip=[alt.Tooltip("ecpm:Q", title="eCPM", format="$.2f")],
+    )
 
-line_ecpm = base.mark_line(point=True, strokeWidth=3).encode(
-    y=alt.Y("ecpm:Q", title=None),
-    color=alt.value("#7c3aed"),
-)
+    chart = alt.layer(bars, line_fill, line_ecpm).resolve_scale(
+        y="independent"
+    ).properties(height=320).configure_view(
+        stroke=None
+    ).configure_axis(
+        labelColor="#334155",
+        gridColor="#e5e7eb",
+        tickColor="#cbd5e1",
+        labelFontSize=12,
+        titleFontSize=12,
+    )
 
-chart = alt.layer(bars, line_fill, line_ecpm).resolve_scale(
-    y="independent"
-).properties(height=320).configure_view(
-    stroke=None
-).configure_axis(
-    labelColor="#334155",
-    gridColor="#e5e7eb",
-    tickColor="#cbd5e1",
-).configure_legend(
-    orient="top",
-    title=None
-)
-
-st.altair_chart(chart, use_container_width=True)
-st.caption("Expected = baseline median (totals). Delta = Today vs Expected. Ratios derived from totals (not summed).")
+    st.altair_chart(chart, use_container_width=True)
+    st.caption("Revenue bars (left axis). Fill Rate + eCPM lines (separate axes). Hover for exact values.")
+else:
+    st.info("Not enough data to draw trend chart.")
 
 st.write("")
 
