@@ -602,10 +602,6 @@ st.markdown('<div class="panel">', unsafe_allow_html=True)
 st.markdown('<div class="panel-title">Last 7 Days View</div>', unsafe_allow_html=True)
 
 st.markdown(f"<div class='small-note'>{insight_line}</div>", unsafe_allow_html=True)
-st.markdown(
-    "<div class='small-note'>Revenue chart is separate from Fill Rate and eCPM so it stays readable.</div>",
-    unsafe_allow_html=True
-)
 
 st.markdown("</div>", unsafe_allow_html=True)
 
